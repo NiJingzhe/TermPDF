@@ -85,6 +85,24 @@ To refresh the vendored PDFium archives from upstream, run:
 ./scripts/fetch_pdfium.sh
 ```
 
+## Releases
+
+Tagged releases build artifacts for the currently supported packaged targets:
+
+- `aarch64-apple-darwin`
+- `x86_64-unknown-linux-gnu`
+- `i686-unknown-linux-gnu`
+- `armv7-unknown-linux-gnueabihf`
+- `aarch64-unknown-linux-gnu`
+- `powerpc64le-unknown-linux-gnu`
+
+Each release archive contains:
+
+- `termpdf`
+- the matching packaged `libpdfium`
+- `LICENSE`
+- `README.md`
+
 ## Keybindings
 
 - `h j k l`: pan viewport
