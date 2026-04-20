@@ -65,14 +65,16 @@ jobs:
           docker run --rm \
             --platform "${{ matrix.docker_platform }}" \
             -e CARGO_HOME=/cargo \
+            -e RUSTUP_HOME=/cargo/rustup \
             -e TERMPDF_PDFIUM_VARIANT="${{ matrix.pdfium_variant }}" \
             -e TARGET_TRIPLE="${{ matrix.target }}" \
             -v "$PWD":/workspace \
             -v cargo-registry:/cargo/registry \
+            -v cargo-rustup:/cargo/rustup \
             -v cargo-git:/cargo/git \
             -w /workspace \
             rust:1.89-bookworm \
-            bash -lc 'apt-get update && apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev && curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal && . "$HOME/.cargo/env" && rustup target add "$TARGET_TRIPLE" && cargo build --release --target "$TARGET_TRIPLE"'
+            bash -lc 'apt-get update && apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev && curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal && . /cargo/env && rustup target add "$TARGET_TRIPLE" && cargo build --release --target "$TARGET_TRIPLE"'
       - name: Package Linux artifact
         run: |
           chmod +x scripts/package_release.sh
