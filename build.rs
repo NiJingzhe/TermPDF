@@ -20,12 +20,6 @@ const BUNDLED_PDFIUM_VARIANTS: &[BundledPdfiumVariant] = &[
         library_name: "libpdfium.so",
     },
     BundledPdfiumVariant {
-        feature_name: "bundle-pdfium-linux-x86-glibc",
-        config_name: "linux-x86-glibc",
-        vendor_dir: "linux-x86-glibc",
-        library_name: "libpdfium.so",
-    },
-    BundledPdfiumVariant {
         feature_name: "bundle-pdfium-linux-arm-glibc",
         config_name: "linux-arm-glibc",
         vendor_dir: "linux-arm-glibc",
@@ -35,12 +29,6 @@ const BUNDLED_PDFIUM_VARIANTS: &[BundledPdfiumVariant] = &[
         feature_name: "bundle-pdfium-linux-arm64-glibc",
         config_name: "linux-arm64-glibc",
         vendor_dir: "linux-arm64-glibc",
-        library_name: "libpdfium.so",
-    },
-    BundledPdfiumVariant {
-        feature_name: "bundle-pdfium-linux-ppc64-glibc",
-        config_name: "linux-ppc64-glibc",
-        vendor_dir: "linux-ppc64-glibc",
         library_name: "libpdfium.so",
     },
     BundledPdfiumVariant {

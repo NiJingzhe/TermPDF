@@ -11,20 +11,12 @@ fn resolves_linux_glibc_vendor_dirs_for_supported_architectures() {
         Some("linux-x64-glibc")
     );
     assert_eq!(
-        bundled_pdfium_vendor_dir("linux", "x86"),
-        Some("linux-x86-glibc")
-    );
-    assert_eq!(
         bundled_pdfium_vendor_dir("linux", "arm"),
         Some("linux-arm-glibc")
     );
     assert_eq!(
         bundled_pdfium_vendor_dir("linux", "aarch64"),
         Some("linux-arm64-glibc")
-    );
-    assert_eq!(
-        bundled_pdfium_vendor_dir("linux", "powerpc64"),
-        Some("linux-ppc64-glibc")
     );
 }
 

@@ -16,12 +16,6 @@ const BUNDLED_PDFIUM_VARIANTS: &[BundledPdfiumVariant] = &[
         library_name: "libpdfium.so",
     },
     BundledPdfiumVariant {
-        feature_name: "bundle-pdfium-linux-x86-glibc",
-        config_name: "linux-x86-glibc",
-        vendor_dir: "linux-x86-glibc",
-        library_name: "libpdfium.so",
-    },
-    BundledPdfiumVariant {
         feature_name: "bundle-pdfium-linux-arm-glibc",
         config_name: "linux-arm-glibc",
         vendor_dir: "linux-arm-glibc",
@@ -31,12 +25,6 @@ const BUNDLED_PDFIUM_VARIANTS: &[BundledPdfiumVariant] = &[
         feature_name: "bundle-pdfium-linux-arm64-glibc",
         config_name: "linux-arm64-glibc",
         vendor_dir: "linux-arm64-glibc",
-        library_name: "libpdfium.so",
-    },
-    BundledPdfiumVariant {
-        feature_name: "bundle-pdfium-linux-ppc64-glibc",
-        config_name: "linux-ppc64-glibc",
-        vendor_dir: "linux-ppc64-glibc",
         library_name: "libpdfium.so",
     },
     BundledPdfiumVariant {
@@ -51,10 +39,8 @@ pub fn bundled_pdfium_vendor_dir(os: &str, arch: &str) -> Option<&'static str> {
     match (os, arch) {
         ("macos", "aarch64") => Some("macos-arm64"),
         ("linux", "x86_64") => Some("linux-x64-glibc"),
-        ("linux", "x86") | ("linux", "i686") => Some("linux-x86-glibc"),
         ("linux", "arm") | ("linux", "armv7") | ("linux", "armv7l") => Some("linux-arm-glibc"),
         ("linux", "aarch64") => Some("linux-arm64-glibc"),
-        ("linux", "powerpc64") | ("linux", "powerpc64le") => Some("linux-ppc64-glibc"),
         _ => None,
     }
 }

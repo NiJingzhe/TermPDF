@@ -51,10 +51,8 @@ Supported values:
 
 - `macos-arm64`
 - `linux-x64-glibc`
-- `linux-x86-glibc`
 - `linux-arm-glibc`
 - `linux-arm64-glibc`
-- `linux-ppc64-glibc`
 
 Example local config:
 
@@ -70,10 +68,8 @@ The repository vendors PDFium `149.0.7789.0` binaries for:
 
 - `macos-arm64`
 - `linux-x64-glibc`
-- `linux-x86-glibc`
 - `linux-arm-glibc`
 - `linux-arm64-glibc`
-- `linux-ppc64-glibc`
 
 When `pdfium_variant` is set in `termpdf.dev.toml`, `build.rs` copies the matching `libpdfium` into `target/<profile>/`, so both `cargo run` and the final executable can load the packaged dynamic library from the binary directory.
 
@@ -91,10 +87,8 @@ Tagged releases build artifacts for the currently supported packaged targets:
 
 - `aarch64-apple-darwin`
 - `x86_64-unknown-linux-gnu`
-- `i686-unknown-linux-gnu`
 - `armv7-unknown-linux-gnueabihf`
 - `aarch64-unknown-linux-gnu`
-- `powerpc64le-unknown-linux-gnu`
 
 Each release archive contains:
 
