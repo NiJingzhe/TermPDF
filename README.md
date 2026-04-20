@@ -19,6 +19,14 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 
 ## Usage
 
+For the best developer experience, create a local project config first so every `cargo run` and `cargo build` automatically uses the PDFium bundle for your platform:
+
+```bash
+cp termpdf.dev.toml.example termpdf.dev.toml
+```
+
+Then edit `termpdf.dev.toml` and set `pdfium_variant` to the bundle that matches your development machine.
+
 ```bash
 cargo run -- path/to/file.pdf
 ```
@@ -33,6 +41,48 @@ If PDFium is not available in the system library path, TermPDF will try the bund
 
 ```bash
 cargo run -- path/to/file.pdf --pdfium-lib /path/to/pdfium
+```
+
+## Developer Config
+
+`termpdf.dev.toml` is the project-local development config that selects which vendored PDFium dynamic library Cargo should copy next to the built binary.
+
+Supported values:
+
+- `macos-arm64`
+- `linux-x64-glibc`
+- `linux-x86-glibc`
+- `linux-arm-glibc`
+- `linux-arm64-glibc`
+- `linux-ppc64-glibc`
+
+Example local config:
+
+```toml
+pdfium_variant = "linux-x64-glibc"
+```
+
+`termpdf.dev.toml` is ignored on purpose, so each developer can choose the right platform locally without changing the repository.
+
+## Bundled PDFium Variants
+
+The repository vendors PDFium `149.0.7789.0` binaries for:
+
+- `macos-arm64`
+- `linux-x64-glibc`
+- `linux-x86-glibc`
+- `linux-arm-glibc`
+- `linux-arm64-glibc`
+- `linux-ppc64-glibc`
+
+When `pdfium_variant` is set in `termpdf.dev.toml`, `build.rs` copies the matching `libpdfium` into `target/<profile>/`, so both `cargo run` and the final executable can load the packaged dynamic library from the binary directory.
+
+The older environment variable and Cargo feature based bundle selection still work, but the recommended path for development is the root-level local config above.
+
+To refresh the vendored PDFium archives from upstream, run:
+
+```bash
+./scripts/fetch_pdfium.sh
 ```
 
 ## Keybindings

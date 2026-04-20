@@ -131,6 +131,7 @@ fn bundled_pdfium_lookup_prefers_explicit_path() {
     let resolved = resolve_pdfium_lib_path_for_tests(
         Some(PathBuf::from("/tmp/custom/libpdfium.dylib")),
         None,
+        None,
         PathBuf::from("/workspace/project"),
         "macos",
         "aarch64",
@@ -142,6 +143,7 @@ fn bundled_pdfium_lookup_prefers_explicit_path() {
 #[test]
 fn bundled_pdfium_lookup_uses_project_vendor_directory_for_macos_arm64() {
     let resolved = resolve_pdfium_lib_path_for_tests(
+        None,
         None,
         None,
         PathBuf::from("/workspace/project"),
@@ -162,6 +164,7 @@ fn bundled_pdfium_lookup_uses_project_vendor_directory_for_linux_glibc_x64() {
     let resolved = resolve_pdfium_lib_path_for_tests(
         None,
         None,
+        None,
         PathBuf::from("/workspace/project"),
         "linux",
         "x86_64",
@@ -173,4 +176,18 @@ fn bundled_pdfium_lookup_uses_project_vendor_directory_for_linux_glibc_x64() {
             "/workspace/project/vendor/pdfium/linux-x64-glibc/lib/libpdfium.so"
         ))
     );
+}
+
+#[test]
+fn bundled_pdfium_lookup_prefers_packaged_library_next_to_binary() {
+    let resolved = resolve_pdfium_lib_path_for_tests(
+        None,
+        None,
+        Some(PathBuf::from("/dist/libpdfium.so")),
+        PathBuf::from("/workspace/project"),
+        "linux",
+        "x86_64",
+    );
+
+    assert_eq!(resolved, Some(PathBuf::from("/dist/libpdfium.so")));
 }
