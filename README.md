@@ -17,6 +17,21 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 - Dark mode toggle
 - Watch mode with live PDF reload
 
+## Install
+
+Homebrew tap:
+
+```bash
+brew tap NiJingzhe/termpdf
+brew install termpdf
+```
+
+Or install directly:
+
+```bash
+brew install NiJingzhe/termpdf/termpdf
+```
+
 ## Usage
 
 For the best developer experience, create a local project config first so every `cargo run` and `cargo build` automatically uses the PDFium bundle for your platform:
