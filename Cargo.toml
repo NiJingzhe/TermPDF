@@ -2,6 +2,16 @@
 name = "termpdf"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
+
+[features]
+default = []
+bundle-pdfium-linux-x64-glibc = []
+bundle-pdfium-linux-x86-glibc = []
+bundle-pdfium-linux-arm-glibc = []
+bundle-pdfium-linux-arm64-glibc = []
+bundle-pdfium-linux-ppc64-glibc = []
+bundle-pdfium-macos-arm64 = []
 
 [dependencies]
 base64 = "0.22.1"

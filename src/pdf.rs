@@ -7,6 +7,7 @@ use color_eyre::eyre::{bail, OptionExt, Result, WrapErr};
 use pdfium_render::prelude::*;
 
 use crate::document::{Document, Glyph, LinkTarget, Page, PageLink, PdfLine, PdfRect};
+use crate::pdfium_bundle::{bundled_pdfium_vendor_dir, packaged_pdfium_library_name};
 use crate::render::{PageRenderCache, PageRenderPlan, RenderedPage};
 
 const LINE_MERGE_TOLERANCE_FACTOR: f32 = 0.6;
@@ -185,31 +186,45 @@ fn resolve_pdfium_lib_path(
     os: &str,
     arch: &str,
 ) -> Option<PathBuf> {
-    resolve_pdfium_lib_path_for_tests(explicit, env_path, project_root, os, arch)
-        .filter(|path| path.exists())
+    let packaged_lib_path = env::current_exe().ok().and_then(|exe| {
+        let parent = exe.parent()?;
+        packaged_pdfium_library_name(os).map(|name| parent.join(name))
+    });
+
+    resolve_pdfium_lib_path_for_tests(
+        explicit,
+        env_path,
+        packaged_lib_path,
+        project_root,
+        os,
+        arch,
+    )
+    .filter(|path| path.exists())
 }
 
 fn bundled_pdfium_path(project_root: PathBuf, os: &str, arch: &str) -> Option<PathBuf> {
-    match (os, arch) {
-        ("macos", "aarch64") => {
-            Some(project_root.join("vendor/pdfium/macos-arm64/lib/libpdfium.dylib"))
-        }
-        ("linux", "x86_64") => {
-            Some(project_root.join("vendor/pdfium/linux-x64-glibc/lib/libpdfium.so"))
-        }
-        _ => None,
-    }
+    let vendor_dir = bundled_pdfium_vendor_dir(os, arch)?;
+    let library_name = packaged_pdfium_library_name(os)?;
+    Some(
+        project_root
+            .join("vendor/pdfium")
+            .join(vendor_dir)
+            .join("lib")
+            .join(library_name),
+    )
 }
 
 pub fn resolve_pdfium_lib_path_for_tests(
     explicit: Option<PathBuf>,
     env_path: Option<PathBuf>,
+    packaged_lib_path: Option<PathBuf>,
     project_root: PathBuf,
     os: &str,
     arch: &str,
 ) -> Option<PathBuf> {
     explicit
         .or(env_path)
+        .or(packaged_lib_path)
         .or_else(|| bundled_pdfium_path(project_root, os, arch))
 }
 
