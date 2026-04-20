@@ -6,6 +6,9 @@ on:
       - "v*"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-macos-arm64:
     runs-on: macos-14
@@ -69,7 +72,7 @@ jobs:
             -v cargo-git:/cargo/git \
             -w /workspace \
             rust:1.89-bookworm \
-            bash -lc 'apt-get update && apt-get install -y pkg-config libssl-dev && rustup target add "$TARGET_TRIPLE" && cargo build --release --target "$TARGET_TRIPLE"'
+            bash -lc 'apt-get update && apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev && curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal && . "$HOME/.cargo/env" && rustup target add "$TARGET_TRIPLE" && cargo build --release --target "$TARGET_TRIPLE"'
       - name: Package Linux artifact
         run: |
           chmod +x scripts/package_release.sh
