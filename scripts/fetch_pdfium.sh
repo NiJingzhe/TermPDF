@@ -19,8 +19,6 @@ download_and_extract() {
 }
 
 download_and_extract "pdfium-linux-x64.tgz" "linux-x64-glibc"
-download_and_extract "pdfium-linux-x86.tgz" "linux-x86-glibc"
 download_and_extract "pdfium-linux-arm.tgz" "linux-arm-glibc"
 download_and_extract "pdfium-linux-arm64.tgz" "linux-arm64-glibc"
-download_and_extract "pdfium-linux-ppc64.tgz" "linux-ppc64-glibc"
 download_and_extract "pdfium-mac-arm64.tgz" "macos-arm64"
