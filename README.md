@@ -68,7 +68,8 @@ If you install the files manually into the filesystem, keep `termpdf` and `libpd
 Build dependencies:
 
 - Rust stable toolchain with `cargo`
-- A supported PDFium bundle variant from this repository, or another compatible PDFium dynamic library
+- `gh` or `curl` and `tar`, so the build can download and unpack PDFium automatically
+- A supported PDFium bundle variant, or another compatible PDFium dynamic library
 
 For local development, the recommended path is:
 
@@ -100,7 +101,7 @@ Supported source-build bundle variants:
 - `linux-arm-glibc`
 - `linux-arm64-glibc`
 
-After a successful release build, `build.rs` copies the matching `libpdfium` next to the binary in `target/release/`.
+During the build, TermPDF automatically downloads the matching PDFium archive from `bblanchon/pdfium-binaries` into `.cache/pdfium/`, extracts it, and then copies the matching `libpdfium` next to the binary in `target/<profile>/`.
 
 ### Packaging Notes
 
@@ -149,7 +150,7 @@ Watch mode:
 cargo run -- path/to/file.pdf -w
 ```
 
-If PDFium is not available in the system library path, TermPDF will try the bundled binaries under `vendor/pdfium/`. You can also point to a PDFium build explicitly:
+If PDFium is not available in the system library path, TermPDF will try the downloaded cache under `.cache/pdfium/`. You can also point to a PDFium build explicitly:
 
 ```bash
 cargo run -- path/to/file.pdf --pdfium-lib /path/to/pdfium
@@ -183,14 +184,14 @@ The repository vendors PDFium `149.0.7789.0` binaries for:
 - `linux-arm-glibc`
 - `linux-arm64-glibc`
 
-When `pdfium_variant` is set in `termpdf.dev.toml`, `build.rs` copies the matching `libpdfium` into `target/<profile>/`, so both `cargo run` and the final executable can load the packaged dynamic library from the binary directory.
+When `pdfium_variant` is set in `termpdf.dev.toml`, `build.rs` downloads the matching PDFium archive if needed, caches it in `.cache/pdfium/`, and copies the matching `libpdfium` into `target/<profile>/`, so both `cargo run` and the final executable can load the packaged dynamic library from the binary directory.
 
 The older environment variable and Cargo feature based bundle selection still work, but the recommended path for development is the root-level local config above.
 
 To refresh the vendored PDFium archives from upstream, run:
 
 ```bash
-./scripts/fetch_pdfium.sh
+./scripts/fetch_pdfium.sh linux-x64-glibc
 ```
 
 ## Releases

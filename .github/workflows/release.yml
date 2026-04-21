@@ -22,6 +22,8 @@ jobs:
         run: cargo build --release --target aarch64-apple-darwin
         env:
           TERMPDF_PDFIUM_VARIANT: macos-arm64
+      - name: Fetch macOS arm64 PDFium
+        run: scripts/fetch_pdfium.sh macos-arm64
       - name: Package macOS arm64 artifact
         run: |
           chmod +x scripts/package_release.sh
@@ -69,6 +71,8 @@ jobs:
             -w /workspace \
             rust:1.89-bookworm \
             bash -lc 'apt-get update && apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev && curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal && . /cargo/env && rustup target add "$TARGET_TRIPLE" && cargo build --release --target "$TARGET_TRIPLE"'
+      - name: Fetch Linux PDFium
+        run: scripts/fetch_pdfium.sh "${{ matrix.pdfium_variant }}"
       - name: Package Linux artifact
         run: |
           chmod +x scripts/package_release.sh

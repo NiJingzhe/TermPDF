@@ -31,6 +31,8 @@ case "$PDFIUM_VARIANT" in
     ;;
 esac
 
-cp "vendor/pdfium/${PDFIUM_VARIANT}/lib/${PDFIUM_LIB_NAME}" "$STAGE_DIR/${PDFIUM_LIB_NAME}"
+PDFIUM_DIR="$("$(dirname "$0")/fetch_pdfium.sh" "$PDFIUM_VARIANT")"
+
+cp "$PDFIUM_DIR/lib/${PDFIUM_LIB_NAME}" "$STAGE_DIR/${PDFIUM_LIB_NAME}"
 
 tar -czf "${OUTPUT_DIR}/${ARCHIVE_BASENAME}.tar.gz" -C "$OUTPUT_DIR" "$ARCHIVE_BASENAME"

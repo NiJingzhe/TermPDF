@@ -7,7 +7,9 @@ use color_eyre::eyre::{bail, OptionExt, Result, WrapErr};
 use pdfium_render::prelude::*;
 
 use crate::document::{Document, Glyph, LinkTarget, Page, PageLink, PdfLine, PdfRect};
-use crate::pdfium_bundle::{bundled_pdfium_vendor_dir, packaged_pdfium_library_name};
+use crate::pdfium_bundle::{
+    bundled_pdfium_variant, packaged_pdfium_library_name, pdfium_extracted_dir,
+};
 use crate::render::{PageRenderCache, PageRenderPlan, RenderedPage};
 
 const LINE_MERGE_TOLERANCE_FACTOR: f32 = 0.6;
@@ -203,14 +205,11 @@ fn resolve_pdfium_lib_path(
 }
 
 fn bundled_pdfium_path(project_root: PathBuf, os: &str, arch: &str) -> Option<PathBuf> {
-    let vendor_dir = bundled_pdfium_vendor_dir(os, arch)?;
-    let library_name = packaged_pdfium_library_name(os)?;
+    let variant = bundled_pdfium_variant(os, arch)?;
     Some(
-        project_root
-            .join("vendor/pdfium")
-            .join(vendor_dir)
+        pdfium_extracted_dir(project_root, variant)
             .join("lib")
-            .join(library_name),
+            .join(variant.library_name),
     )
 }
 
