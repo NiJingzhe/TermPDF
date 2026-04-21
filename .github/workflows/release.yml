@@ -14,6 +14,8 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      - name: Make scripts executable
+        run: chmod +x scripts/fetch_pdfium.sh scripts/package_release.sh
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -26,7 +28,6 @@ jobs:
         run: scripts/fetch_pdfium.sh macos-arm64
       - name: Package macOS arm64 artifact
         run: |
-          chmod +x scripts/package_release.sh
           TERMPDF_RELEASE_VERSION="${GITHUB_REF_NAME#v}" scripts/package_release.sh \
             aarch64-apple-darwin \
             macos-arm64 \
@@ -46,14 +47,13 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             pdfium_variant: linux-x64-glibc
             docker_platform: linux/amd64
-          - target: armv7-unknown-linux-gnueabihf
-            pdfium_variant: linux-arm-glibc
-            docker_platform: linux/arm/v7
           - target: aarch64-unknown-linux-gnu
             pdfium_variant: linux-arm64-glibc
             docker_platform: linux/arm64
     steps:
       - uses: actions/checkout@v4
+      - name: Make scripts executable
+        run: chmod +x scripts/fetch_pdfium.sh scripts/package_release.sh
       - name: Enable QEMU
         uses: docker/setup-qemu-action@v3
       - name: Build Linux artifact in target container
@@ -75,7 +75,6 @@ jobs:
         run: scripts/fetch_pdfium.sh "${{ matrix.pdfium_variant }}"
       - name: Package Linux artifact
         run: |
-          chmod +x scripts/package_release.sh
           TERMPDF_RELEASE_VERSION="${GITHUB_REF_NAME#v}" scripts/package_release.sh \
             "${{ matrix.target }}" \
             "${{ matrix.pdfium_variant }}" \

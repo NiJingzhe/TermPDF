@@ -18,9 +18,6 @@ case "$VARIANT" in
   linux-x64-glibc)
     STEM="linux-x64"
     ;;
-  linux-arm-glibc)
-    STEM="linux-arm"
-    ;;
   linux-arm64-glibc)
     STEM="linux-arm64"
     ;;
