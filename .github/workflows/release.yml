@@ -56,10 +56,13 @@ jobs:
         run: chmod +x scripts/fetch_pdfium.sh scripts/package_release.sh
       - name: Enable QEMU
         uses: docker/setup-qemu-action@v3
+      - name: Fetch Linux PDFium
+        run: scripts/fetch_pdfium.sh "${{ matrix.pdfium_variant }}"
       - name: Build Linux artifact in target container
         run: |
           docker run --rm \
             --platform "${{ matrix.docker_platform }}" \
+            --user "$(id -u):$(id -g)" \
             -e CARGO_HOME=/cargo \
             -e RUSTUP_HOME=/cargo/rustup \
             -e TERMPDF_PDFIUM_VARIANT="${{ matrix.pdfium_variant }}" \
@@ -71,8 +74,6 @@ jobs:
             -w /workspace \
             rust:1.89-bookworm \
             bash -lc 'apt-get update && apt-get install -y curl ca-certificates build-essential pkg-config libssl-dev && curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal && . /cargo/env && rustup target add "$TARGET_TRIPLE" && cargo build --release --target "$TARGET_TRIPLE"'
-      - name: Fetch Linux PDFium
-        run: scripts/fetch_pdfium.sh "${{ matrix.pdfium_variant }}"
       - name: Package Linux artifact
         run: |
           TERMPDF_RELEASE_VERSION="${GITHUB_REF_NAME#v}" scripts/package_release.sh \

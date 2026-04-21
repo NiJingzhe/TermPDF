@@ -1,6 +1,0 @@
-# Local development configuration for TermPDF.
-# Copy this file to `termpdf.dev.toml` and choose the PDFium bundle
-# that matches your development machine. The matching PDFium archive will be
-# downloaded into `.cache/pdfium/` automatically during the build.
-
-pdfium_variant = "linux-x64-glibc"
