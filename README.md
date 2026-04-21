@@ -39,7 +39,6 @@ brew install NiJingzhe/termpdf/termpdf
 - A supported release platform:
   - `aarch64-apple-darwin`
   - `x86_64-unknown-linux-gnu`
-  - `armv7-unknown-linux-gnueabihf`
   - `aarch64-unknown-linux-gnu`
 - A terminal with kitty graphics protocol support, such as kitty or ghostty
 - `termpdf` and the matching packaged `libpdfium` in the same directory, unless you explicitly point to another PDFium build with `PDFIUM_LIB_PATH` or `--pdfium-lib`
@@ -68,39 +67,23 @@ If you install the files manually into the filesystem, keep `termpdf` and `libpd
 Build dependencies:
 
 - Rust stable toolchain with `cargo`
-- A supported PDFium bundle variant from this repository, or another compatible PDFium dynamic library
+- `gh` or `curl` and `tar`, so the build can download and unpack PDFium automatically
+- A supported PDFium bundle variant, or another compatible PDFium dynamic library
 
-For local development, the recommended path is:
-
-```bash
-cp termpdf.dev.toml.example termpdf.dev.toml
-```
-
-Then set the local PDFium bundle variant and build:
-
-```toml
-pdfium_variant = "linux-x64-glibc"
-```
-
-```bash
-cargo build --release
-./target/release/termpdf path/to/file.pdf
-```
-
-For packaging and CI, prefer setting the build-time variant directly instead of creating a local config file:
+Set the PDFium variant with an environment variable and build:
 
 ```bash
 TERMPDF_PDFIUM_VARIANT=linux-x64-glibc cargo build --release
+./target/release/termpdf path/to/file.pdf
 ```
 
-Supported source-build bundle variants:
+Supported source-build values for `TERMPDF_PDFIUM_VARIANT`:
 
 - `macos-arm64`
 - `linux-x64-glibc`
-- `linux-arm-glibc`
 - `linux-arm64-glibc`
 
-After a successful release build, `build.rs` copies the matching `libpdfium` next to the binary in `target/release/`.
+During the build, TermPDF automatically downloads the matching PDFium archive from `bblanchon/pdfium-binaries` into `.cache/pdfium/`, extracts it, and then copies the matching `libpdfium` next to the binary in `target/<profile>/`.
 
 ### Packaging Notes
 
@@ -131,66 +114,58 @@ For an AUR binary package on `x86_64`, unpack the release tarball and install th
 
 ## Usage
 
-For the best developer experience, create a local project config first so every `cargo run` and `cargo build` automatically uses the PDFium bundle for your platform:
+For source builds, set `TERMPDF_PDFIUM_VARIANT` to the bundle that matches your machine.
 
 ```bash
-cp termpdf.dev.toml.example termpdf.dev.toml
-```
-
-Then edit `termpdf.dev.toml` and set `pdfium_variant` to the bundle that matches your development machine.
-
-```bash
-cargo run -- path/to/file.pdf
+TERMPDF_PDFIUM_VARIANT=linux-x64-glibc cargo run -- path/to/file.pdf
 ```
 
 Watch mode:
 
 ```bash
-cargo run -- path/to/file.pdf -w
+TERMPDF_PDFIUM_VARIANT=linux-x64-glibc cargo run -- path/to/file.pdf -w
 ```
 
-If PDFium is not available in the system library path, TermPDF will try the bundled binaries under `vendor/pdfium/`. You can also point to a PDFium build explicitly:
+If PDFium is not available in the system library path, TermPDF will try the downloaded cache under `.cache/pdfium/`. You can also point to a PDFium build explicitly:
 
 ```bash
 cargo run -- path/to/file.pdf --pdfium-lib /path/to/pdfium
 ```
 
-## Developer Config
+## Build Environment
 
-`termpdf.dev.toml` is the project-local development config that selects which vendored PDFium dynamic library Cargo should copy next to the built binary.
+`TERMPDF_PDFIUM_VARIANT` selects which PDFium dynamic library Cargo should download and copy next to the built binary.
 
 Supported values:
 
 - `macos-arm64`
 - `linux-x64-glibc`
-- `linux-arm-glibc`
 - `linux-arm64-glibc`
 
-Example local config:
+Example:
 
-```toml
-pdfium_variant = "linux-x64-glibc"
+```bash
+TERMPDF_PDFIUM_VARIANT=linux-x64-glibc cargo build --release
 ```
 
-`termpdf.dev.toml` is ignored on purpose, so each developer can choose the right platform locally without changing the repository.
+`TERMPDF_PDFIUM_VARIANT` is the recommended path for development, packaging, and CI because it keeps the build configuration explicit and local to the command being run.
 
 ## Bundled PDFium Variants
 
-The repository vendors PDFium `149.0.7789.0` binaries for:
+The build currently supports automatic PDFium downloads for:
 
 - `macos-arm64`
 - `linux-x64-glibc`
-- `linux-arm-glibc`
 - `linux-arm64-glibc`
 
-When `pdfium_variant` is set in `termpdf.dev.toml`, `build.rs` copies the matching `libpdfium` into `target/<profile>/`, so both `cargo run` and the final executable can load the packaged dynamic library from the binary directory.
+When `TERMPDF_PDFIUM_VARIANT` is set, `build.rs` downloads the matching PDFium archive if needed, caches it in `.cache/pdfium/`, and copies the matching `libpdfium` into `target/<profile>/`, so both `cargo run` and the final executable can load the packaged dynamic library from the binary directory.
 
-The older environment variable and Cargo feature based bundle selection still work, but the recommended path for development is the root-level local config above.
+The older Cargo feature based bundle selection still works, but the recommended path for development is the environment variable above.
 
 To refresh the vendored PDFium archives from upstream, run:
 
 ```bash
-./scripts/fetch_pdfium.sh
+./scripts/fetch_pdfium.sh linux-x64-glibc
 ```
 
 ## Releases
@@ -199,7 +174,6 @@ Tagged releases build artifacts for the currently supported packaged targets:
 
 - `aarch64-apple-darwin`
 - `x86_64-unknown-linux-gnu`
-- `armv7-unknown-linux-gnueabihf`
 - `aarch64-unknown-linux-gnu`
 
 Each release archive contains:

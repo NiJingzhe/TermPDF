@@ -141,7 +141,7 @@ fn bundled_pdfium_lookup_prefers_explicit_path() {
 }
 
 #[test]
-fn bundled_pdfium_lookup_uses_project_vendor_directory_for_macos_arm64() {
+fn bundled_pdfium_lookup_uses_project_cache_directory_for_macos_arm64() {
     let resolved = resolve_pdfium_lib_path_for_tests(
         None,
         None,
@@ -154,13 +154,13 @@ fn bundled_pdfium_lookup_uses_project_vendor_directory_for_macos_arm64() {
     assert_eq!(
         resolved,
         Some(PathBuf::from(
-            "/workspace/project/vendor/pdfium/macos-arm64/lib/libpdfium.dylib"
+            "/workspace/project/.cache/pdfium/chromium-7789/macos-arm64/lib/libpdfium.dylib"
         ))
     );
 }
 
 #[test]
-fn bundled_pdfium_lookup_uses_project_vendor_directory_for_linux_glibc_x64() {
+fn bundled_pdfium_lookup_uses_project_cache_directory_for_linux_glibc_x64() {
     let resolved = resolve_pdfium_lib_path_for_tests(
         None,
         None,
@@ -173,7 +173,7 @@ fn bundled_pdfium_lookup_uses_project_vendor_directory_for_linux_glibc_x64() {
     assert_eq!(
         resolved,
         Some(PathBuf::from(
-            "/workspace/project/vendor/pdfium/linux-x64-glibc/lib/libpdfium.so"
+            "/workspace/project/.cache/pdfium/chromium-7789/linux-x64-glibc/lib/libpdfium.so"
         ))
     );
 }

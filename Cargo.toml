@@ -7,7 +7,6 @@ build = "build.rs"
 [features]
 default = []
 bundle-pdfium-linux-x64-glibc = []
-bundle-pdfium-linux-arm-glibc = []
 bundle-pdfium-linux-arm64-glibc = []
 bundle-pdfium-macos-arm64 = []
 

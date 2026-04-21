@@ -1,48 +1,46 @@
-pub const DEV_CONFIG_FILE_NAME: &str = "termpdf.dev.toml";
+use std::path::PathBuf;
+
+pub const PDFIUM_RELEASE_TAG: &str = "chromium/7789";
+pub const PDFIUM_VERSION: &str = "149.0.7789.0";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BundledPdfiumVariant {
     pub feature_name: &'static str,
-    pub config_name: &'static str,
-    pub vendor_dir: &'static str,
+    pub env_name: &'static str,
+    pub platform_archive_stem: &'static str,
     pub library_name: &'static str,
 }
 
 const BUNDLED_PDFIUM_VARIANTS: &[BundledPdfiumVariant] = &[
     BundledPdfiumVariant {
         feature_name: "bundle-pdfium-linux-x64-glibc",
-        config_name: "linux-x64-glibc",
-        vendor_dir: "linux-x64-glibc",
-        library_name: "libpdfium.so",
-    },
-    BundledPdfiumVariant {
-        feature_name: "bundle-pdfium-linux-arm-glibc",
-        config_name: "linux-arm-glibc",
-        vendor_dir: "linux-arm-glibc",
+        env_name: "linux-x64-glibc",
+        platform_archive_stem: "linux-x64",
         library_name: "libpdfium.so",
     },
     BundledPdfiumVariant {
         feature_name: "bundle-pdfium-linux-arm64-glibc",
-        config_name: "linux-arm64-glibc",
-        vendor_dir: "linux-arm64-glibc",
+        env_name: "linux-arm64-glibc",
+        platform_archive_stem: "linux-arm64",
         library_name: "libpdfium.so",
     },
     BundledPdfiumVariant {
         feature_name: "bundle-pdfium-macos-arm64",
-        config_name: "macos-arm64",
-        vendor_dir: "macos-arm64",
+        env_name: "macos-arm64",
+        platform_archive_stem: "mac-arm64",
         library_name: "libpdfium.dylib",
     },
 ];
 
-pub fn bundled_pdfium_vendor_dir(os: &str, arch: &str) -> Option<&'static str> {
-    match (os, arch) {
-        ("macos", "aarch64") => Some("macos-arm64"),
-        ("linux", "x86_64") => Some("linux-x64-glibc"),
-        ("linux", "arm") | ("linux", "armv7") | ("linux", "armv7l") => Some("linux-arm-glibc"),
-        ("linux", "aarch64") => Some("linux-arm64-glibc"),
-        _ => None,
-    }
+pub fn bundled_pdfium_variant(os: &str, arch: &str) -> Option<BundledPdfiumVariant> {
+    let env_name = match (os, arch) {
+        ("macos", "aarch64") => "macos-arm64",
+        ("linux", "x86_64") => "linux-x64-glibc",
+        ("linux", "aarch64") => "linux-arm64-glibc",
+        _ => return None,
+    };
+
+    bundled_pdfium_variant_by_env(env_name).ok()
 }
 
 pub fn packaged_pdfium_library_name(os: &str) -> Option<&'static str> {
@@ -80,49 +78,31 @@ where
     }
 }
 
-pub fn bundled_pdfium_variant_by_config(config_name: &str) -> Result<BundledPdfiumVariant, String> {
+pub fn bundled_pdfium_variant_by_env(env_name: &str) -> Result<BundledPdfiumVariant, String> {
     BUNDLED_PDFIUM_VARIANTS
         .iter()
         .copied()
-        .find(|variant| variant.config_name == config_name)
-        .ok_or_else(|| format!("unsupported PDFium variant '{config_name}'"))
+        .find(|variant| variant.env_name == env_name)
+        .ok_or_else(|| format!("unsupported PDFium variant '{env_name}'"))
 }
 
-pub fn dev_config_pdfium_variant_from_contents(contents: &str) -> Result<Option<String>, String> {
-    let mut in_root = true;
+pub fn pdfium_cache_root(project_root: PathBuf) -> PathBuf {
+    project_root.join(".cache").join("pdfium")
+}
 
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
+pub fn pdfium_extracted_dir(project_root: PathBuf, variant: BundledPdfiumVariant) -> PathBuf {
+    pdfium_cache_root(project_root)
+        .join(PDFIUM_RELEASE_TAG.replace('/', "-"))
+        .join(variant.env_name)
+}
 
-        if trimmed.starts_with('[') {
-            in_root = false;
-            continue;
-        }
+pub fn pdfium_archive_name(variant: BundledPdfiumVariant) -> String {
+    format!("pdfium-{}.tgz", variant.platform_archive_stem)
+}
 
-        if !in_root {
-            continue;
-        }
-
-        let Some((key, raw_value)) = trimmed.split_once('=') else {
-            continue;
-        };
-        if key.trim() != "pdfium_variant" {
-            continue;
-        }
-
-        let raw_value = raw_value.split('#').next().unwrap_or("").trim();
-        let Some(value) = raw_value
-            .strip_prefix('"')
-            .and_then(|value| value.strip_suffix('"'))
-        else {
-            return Err("pdfium_variant must be a double-quoted string".to_string());
-        };
-
-        return Ok(Some(value.to_string()));
-    }
-
-    Ok(None)
+pub fn supported_env_names() -> Vec<&'static str> {
+    BUNDLED_PDFIUM_VARIANTS
+        .iter()
+        .map(|variant| variant.env_name)
+        .collect()
 }
