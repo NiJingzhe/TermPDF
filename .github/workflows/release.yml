@@ -62,7 +62,6 @@ jobs:
         run: |
           docker run --rm \
             --platform "${{ matrix.docker_platform }}" \
-            --user "$(id -u):$(id -g)" \
             -e CARGO_HOME=/cargo \
             -e RUSTUP_HOME=/cargo/rustup \
             -e TERMPDF_PDFIUM_VARIANT="${{ matrix.pdfium_variant }}" \
