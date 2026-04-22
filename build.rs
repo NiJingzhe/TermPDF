@@ -5,6 +5,7 @@ use std::process::Command;
 
 const PDFIUM_RELEASE_TAG: &str = "chromium/7789";
 const PDFIUM_RELEASE_REPO: &str = "bblanchon/pdfium-binaries";
+const PDFIUM_SYSTEM_VARIANT: &str = "SYSTEM";
 
 #[derive(Clone, Copy)]
 struct BundledPdfiumVariant {
@@ -138,13 +139,20 @@ fn extract_pdfium_archive(archive_path: &Path, extracted_dir: &Path) {
         .status()
         .unwrap_or_else(|error| panic!("failed to invoke tar for PDFium extraction: {error}"));
     if !status.success() {
-        panic!("failed to extract PDFium archive {}", archive_path.display());
+        panic!(
+            "failed to extract PDFium archive {}",
+            archive_path.display()
+        );
     }
 }
 
 fn selected_variant() -> Option<BundledPdfiumVariant> {
     if let Some(env_name) = env::var_os("TERMPDF_PDFIUM_VARIANT") {
         let env_name = env_name.to_string_lossy();
+        if env_name == PDFIUM_SYSTEM_VARIANT {
+            return None;
+        }
+
         return Some(variant_by_env_name(&env_name).unwrap_or_else(|| {
             panic!(
                 "unsupported TERMPDF_PDFIUM_VARIANT='{env_name}'; expected one of: {}",
@@ -182,10 +190,12 @@ fn variant_by_env_name(env_name: &str) -> Option<BundledPdfiumVariant> {
 }
 
 fn supported_env_names() -> Vec<&'static str> {
-    BUNDLED_PDFIUM_VARIANTS
+    let mut names = BUNDLED_PDFIUM_VARIANTS
         .iter()
         .map(|variant| variant.env_name)
-        .collect()
+        .collect::<Vec<_>>();
+    names.push(PDFIUM_SYSTEM_VARIANT);
+    names
 }
 
 fn pdfium_extracted_dir(project_root: &Path, variant: BundledPdfiumVariant) -> PathBuf {
