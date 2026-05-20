@@ -4,6 +4,13 @@ TermPDF is a terminal PDF reader built with Rust, ratatui, PDFium, and the kitty
 
 It focuses on reader-oriented navigation for kitty-compatible terminals, with image-based PDF rendering instead of text reflow.
 
+## CHANGELOG
+
+### 0.2.0
+
+- Added tmux support through Kitty graphics passthrough. Enable it in `~/.tmux.conf` with `set -g allow-passthrough on`.
+- Added mouse and touchpad navigation for scrolling, horizontal scrolling, zooming with `Ctrl` + scroll, and presentation navigation.
+
 ## Features
 
 - PDFium-backed PDF rendering
@@ -41,6 +48,7 @@ brew install NiJingzhe/termpdf/termpdf
   - `x86_64-unknown-linux-gnu`
   - `aarch64-unknown-linux-gnu`
 - A terminal with kitty graphics protocol support, such as kitty or ghostty
+- tmux is supported when the outer terminal supports Kitty graphics and `set -g allow-passthrough on` is enabled in `~/.tmux.conf`; TermPDF wraps Kitty image commands in tmux passthrough automatically
 - `termpdf` and the matching packaged `libpdfium` in the same directory, unless you explicitly point to another PDFium build with `PDFIUM_LIB_PATH` or `--pdfium-lib`
 
 ### Install From A Release Archive
@@ -48,8 +56,8 @@ brew install NiJingzhe/termpdf/termpdf
 Download the archive for your platform from the GitHub Releases page, then extract it:
 
 ```bash
-tar -xzf termpdf-0.1.0-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.1.0-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.2.0-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.2.0-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 

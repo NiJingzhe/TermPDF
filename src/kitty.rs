@@ -1,8 +1,8 @@
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use flate2::{write::ZlibEncoder, Compression};
-use std::collections::hash_map::DefaultHasher;
+use base64::engine::general_purpose::STANDARD;
+use flate2::{Compression, write::ZlibEncoder};
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 
@@ -21,7 +21,7 @@ pub struct KittyImageIds {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KittyTransport {
     Direct,
-    TmuxPassthrough,
+    TmuxPassthrough { pane_left: u16, pane_top: u16 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,11 +100,61 @@ pub fn parse_probe_response(response: &str, query_id: u32) -> KittyProbeResult {
 pub fn wrap_command_for_transport(command: &str, transport: KittyTransport) -> String {
     match transport {
         KittyTransport::Direct => command.to_string(),
-        KittyTransport::TmuxPassthrough => {
-            let escaped = command.replace('\x1b', "\x1b\x1b");
-            format!("\x1bPtmux;{escaped}\x1b\\")
+        KittyTransport::TmuxPassthrough {
+            pane_left,
+            pane_top,
+        } => wrap_command_for_tmux(command, pane_left, pane_top),
+    }
+}
+
+fn wrap_command_for_tmux(command: &str, pane_left: u16, pane_top: u16) -> String {
+    if let Some((row, col, remaining)) = split_leading_cursor_position(command) {
+        if remaining.starts_with(ESCAPE_PREFIX) {
+            let row = row.saturating_add(pane_top);
+            let col = col.saturating_add(pane_left);
+            let command = format!("\x1b7\x1b[{row};{col}H{remaining}\x1b8");
+            return wrap_tmux_passthrough(&command);
         }
     }
+
+    wrap_kitty_sequences_for_tmux(command)
+}
+
+fn split_leading_cursor_position(command: &str) -> Option<(u16, u16, &str)> {
+    let rest = command.strip_prefix("\x1b[")?;
+    let terminator = rest.find('H')?;
+    let (row, col) = rest[..terminator].split_once(';')?;
+    let row = row.parse().ok()?;
+    let col = col.parse().ok()?;
+
+    Some((row, col, &rest[terminator + 1..]))
+}
+
+fn wrap_kitty_sequences_for_tmux(command: &str) -> String {
+    let mut wrapped = String::with_capacity(command.len());
+    let mut remaining = command;
+
+    while let Some(start) = remaining.find(ESCAPE_PREFIX) {
+        wrapped.push_str(&remaining[..start]);
+
+        let sequence_start = &remaining[start..];
+        let Some(end) = sequence_start.find(ESCAPE_SUFFIX) else {
+            wrapped.push_str(sequence_start);
+            return wrapped;
+        };
+
+        let sequence_end = end + ESCAPE_SUFFIX.len();
+        wrapped.push_str(&wrap_tmux_passthrough(&sequence_start[..sequence_end]));
+        remaining = &sequence_start[sequence_end..];
+    }
+
+    wrapped.push_str(remaining);
+    wrapped
+}
+
+fn wrap_tmux_passthrough(command: &str) -> String {
+    let escaped = command.replace('\x1b', "\x1b\x1b");
+    format!("\x1bPtmux;{escaped}\x1b\\")
 }
 
 pub fn encode_transmit_only(rendered: &RenderedPage, image_id: u32) -> Vec<String> {

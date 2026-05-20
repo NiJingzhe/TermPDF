@@ -2,11 +2,11 @@ mod common;
 
 use std::path::PathBuf;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use termpdf::app::{App, Mode};
 use termpdf::document::{Document, Page};
-use termpdf::render::{build_document_layout, current_page_for_scroll, CellPixels, ViewportPixels};
+use termpdf::render::{CellPixels, ViewportPixels, build_document_layout, current_page_for_scroll};
 
 #[test]
 fn slash_search_enters_mode_and_enter_commits_results() {
@@ -85,6 +85,149 @@ fn ctrl_f_and_ctrl_b_scroll_by_full_viewport() {
 
     assert!(after_forward > 0);
     assert!(app.viewport_offset().y < after_forward);
+}
+
+#[test]
+fn mouse_wheel_scrolls_document_vertically() {
+    let document = common::sample_document();
+    let mut app = App::new(document);
+
+    app.handle_mouse(mouse_event(MouseEventKind::ScrollDown, KeyModifiers::NONE));
+    let after_down = app.viewport_offset().y;
+    app.handle_mouse(mouse_event(MouseEventKind::ScrollUp, KeyModifiers::NONE));
+
+    assert!(after_down > 0);
+    assert!(app.viewport_offset().y < after_down);
+}
+
+#[test]
+fn shifted_mouse_wheel_scrolls_document_horizontally() {
+    let document = common::sample_document();
+    let mut app = App::new(document);
+    app.handle_key(KeyEvent::from(KeyCode::Char('=')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('=')));
+
+    app.handle_mouse(mouse_event(MouseEventKind::ScrollDown, KeyModifiers::SHIFT));
+    let after_right = app.viewport_offset().x;
+    app.handle_mouse(mouse_event(MouseEventKind::ScrollUp, KeyModifiers::SHIFT));
+
+    assert!(after_right > 0);
+    assert!(app.viewport_offset().x < after_right);
+}
+
+#[test]
+fn horizontal_mouse_wheel_scrolls_document_horizontally() {
+    let document = common::sample_document();
+    let mut app = App::new(document);
+    app.handle_key(KeyEvent::from(KeyCode::Char('=')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('=')));
+
+    app.handle_mouse(mouse_event(MouseEventKind::ScrollRight, KeyModifiers::NONE));
+    let after_right = app.viewport_offset().x;
+    app.handle_mouse(mouse_event(MouseEventKind::ScrollLeft, KeyModifiers::NONE));
+
+    assert!(after_right > 0);
+    assert!(app.viewport_offset().x < after_right);
+}
+
+#[test]
+fn ctrl_mouse_wheel_adjusts_zoom() {
+    let document = common::sample_document();
+    let mut app = App::new(document);
+
+    app.handle_mouse(mouse_event(MouseEventKind::ScrollUp, KeyModifiers::CONTROL));
+    assert_eq!(app.zoom_percent(), 110);
+
+    app.handle_mouse(mouse_event(
+        MouseEventKind::ScrollDown,
+        KeyModifiers::CONTROL,
+    ));
+    assert_eq!(app.zoom_percent(), 100);
+}
+
+#[test]
+fn event_batch_coalesces_repeated_mouse_scrolls() {
+    let mut one = App::new(common::sample_document());
+    let mut many = App::new(common::sample_document());
+
+    one.handle_events([Event::Mouse(mouse_event(
+        MouseEventKind::ScrollDown,
+        KeyModifiers::NONE,
+    ))]);
+    many.handle_events(
+        (0..20).map(|_| Event::Mouse(mouse_event(MouseEventKind::ScrollDown, KeyModifiers::NONE))),
+    );
+
+    assert_eq!(many.viewport_offset().y, one.viewport_offset().y);
+}
+
+#[test]
+fn event_batch_cancels_reversed_mouse_scrolls() {
+    let mut app = App::new(common::sample_document());
+
+    app.handle_events([
+        Event::Mouse(mouse_event(MouseEventKind::ScrollDown, KeyModifiers::NONE)),
+        Event::Mouse(mouse_event(MouseEventKind::ScrollUp, KeyModifiers::NONE)),
+    ]);
+
+    assert_eq!(app.viewport_offset().y, 0);
+}
+
+#[test]
+fn event_batch_coalesces_repeated_key_pans() {
+    let mut one = App::new(common::sample_document());
+    let mut many = App::new(common::sample_document());
+
+    one.handle_events([Event::Key(KeyEvent::from(KeyCode::Char('j')))]);
+    many.handle_events((0..20).map(|_| Event::Key(KeyEvent::from(KeyCode::Char('j')))));
+
+    assert_eq!(many.viewport_offset().y, one.viewport_offset().y);
+}
+
+#[test]
+fn event_batch_cancels_reversed_key_pans() {
+    let mut app = App::new(common::sample_document());
+
+    app.handle_events([
+        Event::Key(KeyEvent::from(KeyCode::Char('j'))),
+        Event::Key(KeyEvent::from(KeyCode::Char('k'))),
+    ]);
+
+    assert_eq!(app.viewport_offset().y, 0);
+}
+
+#[test]
+fn event_batch_coalesces_repeated_zoom_inputs() {
+    let mut app = App::new(common::sample_document());
+
+    app.handle_events((0..20).map(|_| Event::Key(KeyEvent::from(KeyCode::Char('=')))));
+
+    assert_eq!(app.zoom_percent(), 125);
+}
+
+#[test]
+fn event_batch_cancels_reversed_zoom_inputs() {
+    let mut app = App::new(common::sample_document());
+
+    app.handle_events([
+        Event::Key(KeyEvent::from(KeyCode::Char('='))),
+        Event::Key(KeyEvent::from(KeyCode::Char('-'))),
+    ]);
+
+    assert_eq!(app.zoom_percent(), 100);
+}
+
+#[test]
+fn presentation_mouse_wheel_changes_pages() {
+    let document = sample_document_with_pages(3, 3);
+    let mut app = App::new(document);
+    app.handle_key(KeyEvent::from(KeyCode::F(5)));
+
+    app.handle_mouse(mouse_event(MouseEventKind::ScrollDown, KeyModifiers::NONE));
+    assert_eq!(app.cursor_page(), 1);
+
+    app.handle_mouse(mouse_event(MouseEventKind::ScrollUp, KeyModifiers::NONE));
+    assert_eq!(app.cursor_page(), 0);
 }
 
 #[test]
@@ -331,6 +474,15 @@ fn sample_document_with_pages(page_count: usize, lines_per_page: usize) -> Docum
                 Page::from_text(page_index, &refs)
             })
             .collect(),
+    }
+}
+
+fn mouse_event(kind: MouseEventKind, modifiers: KeyModifiers) -> MouseEvent {
+    MouseEvent {
+        kind,
+        column: 10,
+        row: 5,
+        modifiers,
     }
 }
 
