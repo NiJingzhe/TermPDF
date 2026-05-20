@@ -1,8 +1,8 @@
 use termpdf::kitty::{
+    HighlightRendererState, KittyImageIds, KittyProbeResult, KittyTransport, RendererState,
     encode_delete_image, encode_positioned_put_existing_image, encode_probe_query,
     encode_put_existing_image, encode_transmit_and_display, encode_transmit_only,
-    parse_probe_response, wrap_command_for_transport, HighlightRendererState, KittyImageIds,
-    KittyProbeResult, KittyTransport, RendererState,
+    parse_probe_response, wrap_command_for_transport,
 };
 use termpdf::render::RenderedPage;
 
@@ -34,7 +34,9 @@ fn encodes_single_chunk_rgba_transfer() {
     );
 
     assert_eq!(commands.len(), 1);
-    assert!(commands[0].starts_with("\x1b_Ga=T,q=2,i=9,p=4,f=32,s=1,v=1,o=z,C=1,c=2,r=3,z=-1,m=0;"));
+    assert!(
+        commands[0].starts_with("\x1b_Ga=T,q=2,i=9,p=4,f=32,s=1,v=1,o=z,C=1,c=2,r=3,z=-1,m=0;")
+    );
     assert!(commands[0].ends_with("\x1b\\"));
 }
 
@@ -50,10 +52,12 @@ fn encodes_chunked_transfer_with_follow_up_chunks() {
     assert!(commands[0].contains(",m=1;"));
     assert!(commands[0].starts_with("\x1b_Ga=T,q=2,i=1,p=1,f=32,s=1,v=1,o=z,C=1,c=2,r=3,z=-1"));
     assert!(commands[1].starts_with("\x1b_Gm="));
-    assert!(commands
-        .iter()
-        .skip(1)
-        .all(|command| command.contains(",q=2;")));
+    assert!(
+        commands
+            .iter()
+            .skip(1)
+            .all(|command| command.contains(",q=2;"))
+    );
     assert!(commands.last().unwrap().starts_with("\x1b_Gm=0,q=2;"));
 }
 
@@ -338,9 +342,11 @@ fn renderer_state_deletes_pages_that_leave_visible_set() {
 
     assert_eq!(first_commands.len(), 4);
     assert_eq!(second_commands.len(), 2);
-    assert!(second_commands
-        .iter()
-        .all(|command| command.starts_with("\x1b_Ga=d,d=I,q=2,i=")));
+    assert!(
+        second_commands
+            .iter()
+            .all(|command| command.starts_with("\x1b_Ga=d,d=I,q=2,i="))
+    );
 }
 
 #[test]
@@ -373,10 +379,44 @@ fn encodes_positioned_put_with_cursor_move_prefix() {
 
 #[test]
 fn wraps_commands_for_tmux_passthrough() {
-    let wrapped =
-        wrap_command_for_transport("\x1b_Ga=q;test\x1b\\", KittyTransport::TmuxPassthrough);
+    let wrapped = wrap_command_for_transport(
+        "\x1b_Ga=q;test\x1b\\",
+        KittyTransport::TmuxPassthrough {
+            pane_left: 0,
+            pane_top: 0,
+        },
+    );
 
     assert_eq!(wrapped, "\x1bPtmux;\x1b\x1b_Ga=q;test\x1b\x1b\\\x1b\\");
+}
+
+#[test]
+fn tmux_passthrough_wraps_cursor_move_with_kitty_sequence() {
+    let wrapped = wrap_command_for_transport(
+        "\x1b[5;11H\x1b_Ga=q;test\x1b\\",
+        KittyTransport::TmuxPassthrough {
+            pane_left: 20,
+            pane_top: 3,
+        },
+    );
+
+    assert_eq!(
+        wrapped,
+        "\x1bPtmux;\x1b\x1b7\x1b\x1b[8;31H\x1b\x1b_Ga=q;test\x1b\x1b\\\x1b\x1b8\x1b\\"
+    );
+}
+
+#[test]
+fn tmux_passthrough_leaves_non_kitty_commands_unchanged() {
+    let wrapped = wrap_command_for_transport(
+        "\x1b[2J",
+        KittyTransport::TmuxPassthrough {
+            pane_left: 0,
+            pane_top: 0,
+        },
+    );
+
+    assert_eq!(wrapped, "\x1b[2J");
 }
 
 #[test]
