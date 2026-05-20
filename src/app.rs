@@ -11,18 +11,18 @@ use crossterm::event::{
 };
 use crossterm::execute;
 use crossterm::terminal;
-use ratatui::layout::Rect;
 use ratatui::DefaultTerminal;
+use ratatui::layout::Rect;
 
 use crate::document::{Document, LinkTarget, PageLink, PdfRect};
-use crate::kitty::{wrap_command_for_transport, KittyTransport, RendererState};
+use crate::kitty::{KittyTransport, RendererState, wrap_command_for_transport};
 use crate::pdf::{PdfBackend, PdfSession};
-use crate::platform::{likely_supports_kitty_graphics, running_inside_tmux};
+use crate::platform::{kitty_transport, likely_supports_kitty_graphics};
 use crate::render::{
-    build_document_layout, build_page_render_plan, build_visible_page_plans,
-    compose_visible_page_frame, compose_visible_page_frame_with_offsets, current_page_for_scroll,
-    follow_tag_badge_size, viewport_pixels, CellPixels, DocumentLayout, DocumentLayoutPage,
-    FollowTag, FrameOffsets, PageRenderPlan, ViewportOffset, ViewportPixels,
+    CellPixels, DocumentLayout, DocumentLayoutPage, FollowTag, FrameOffsets, PageRenderPlan,
+    ViewportOffset, ViewportPixels, build_document_layout, build_page_render_plan,
+    build_visible_page_plans, compose_visible_page_frame, compose_visible_page_frame_with_offsets,
+    current_page_for_scroll, follow_tag_badge_size, viewport_pixels,
 };
 use crate::search::{DocumentIndex, SearchMatch};
 use crate::ui::{render, viewport_area};
@@ -34,6 +34,10 @@ const DEFAULT_CELL: CellPixels = CellPixels {
     height: 20,
 };
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const MOUSE_SCROLL_ROWS: u32 = 3;
+const MOUSE_SCROLL_COLUMNS: u32 = 6;
+const MOUSE_ZOOM_STEP_PERCENT: i16 = 10;
+const COALESCED_ZOOM_LIMIT_PERCENT: i16 = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RunOptions {
@@ -80,6 +84,35 @@ struct FollowHint {
 struct FollowClusterKey {
     page: usize,
     first_link_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct NavigationBatch {
+    pan_x: i32,
+    pan_y: i32,
+    zoom: i16,
+    zoom_mouse: Option<MouseEvent>,
+    presentation_delta: isize,
+}
+
+impl NavigationBatch {
+    fn add_pan_x(&mut self, delta: i32) {
+        self.pan_x = coalesce_axis_i32(self.pan_x, delta);
+    }
+
+    fn add_pan_y(&mut self, delta: i32) {
+        self.pan_y = coalesce_axis_i32(self.pan_y, delta);
+    }
+
+    fn add_zoom(&mut self, delta: i16, mouse: Option<MouseEvent>) {
+        self.zoom = coalesce_axis_i16(self.zoom, delta)
+            .clamp(-COALESCED_ZOOM_LIMIT_PERCENT, COALESCED_ZOOM_LIMIT_PERCENT);
+        self.zoom_mouse = if self.zoom == 0 { None } else { mouse };
+    }
+
+    fn add_presentation_delta(&mut self, delta: isize) {
+        self.presentation_delta = coalesce_axis_isize(self.presentation_delta, delta);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -129,11 +162,7 @@ pub fn run(
     } else {
         None
     };
-    let transport = if running_inside_tmux() {
-        KittyTransport::TmuxPassthrough
-    } else {
-        KittyTransport::Direct
-    };
+    let transport = kitty_transport();
 
     execute!(io::stdout(), EnableMouseCapture)?;
 
@@ -163,19 +192,13 @@ pub fn run(
 
         if options.watch_mode {
             if event::poll(WATCH_POLL_INTERVAL)? {
-                match event::read()? {
-                    Event::Key(key) => app.handle_key(key),
-                    Event::Mouse(mouse) => app.handle_mouse(mouse),
-                    _ => {}
-                }
+                let first = event::read()?;
+                app.handle_events(read_event_batch(first)?);
                 needs_redraw = true;
             }
         } else {
-            match event::read()? {
-                Event::Key(key) => app.handle_key(key),
-                Event::Mouse(mouse) => app.handle_mouse(mouse),
-                _ => {}
-            }
+            let first = event::read()?;
+            app.handle_events(read_event_batch(first)?);
             needs_redraw = true;
         }
     }
@@ -192,6 +215,14 @@ pub fn run(
     execute!(io::stdout(), DisableMouseCapture)?;
 
     Ok(())
+}
+
+fn read_event_batch(first: Event) -> io::Result<Vec<Event>> {
+    let mut events = vec![first];
+    while event::poll(Duration::ZERO)? {
+        events.push(event::read()?);
+    }
+    Ok(events)
 }
 
 fn maybe_reload_document(
@@ -610,13 +641,237 @@ impl App {
         }
     }
 
-    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
-        if self.mode != Mode::Presentation {
-            return;
+    pub fn handle_events<I>(&mut self, events: I)
+    where
+        I: IntoIterator<Item = Event>,
+    {
+        let mut batch = NavigationBatch::default();
+
+        for event in events {
+            match event {
+                Event::Key(key) => {
+                    if !self.try_accumulate_key_navigation(key, &mut batch) {
+                        self.apply_navigation_batch(batch);
+                        batch = NavigationBatch::default();
+                        self.handle_key(key);
+                    }
+                }
+                Event::Mouse(mouse) => {
+                    if !self.try_accumulate_mouse_navigation(mouse, &mut batch) {
+                        self.apply_navigation_batch(batch);
+                        batch = NavigationBatch::default();
+                        self.handle_mouse(mouse);
+                    }
+                }
+                _ => {}
+            }
         }
 
-        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-            self.advance_presentation(1);
+        self.apply_navigation_batch(batch);
+    }
+
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        match self.mode {
+            Mode::Normal => self.handle_normal_mouse(mouse),
+            Mode::Presentation => self.handle_presentation_mouse(mouse),
+            _ => {}
+        }
+    }
+
+    fn try_accumulate_key_navigation(
+        &mut self,
+        key: KeyEvent,
+        batch: &mut NavigationBatch,
+    ) -> bool {
+        if key.kind != KeyEventKind::Press {
+            return true;
+        }
+
+        match self.mode {
+            Mode::Normal if self.pending_g || !self.count_buffer.is_empty() => false,
+            Mode::Normal => match key.code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    batch.add_pan_y(VIEWPORT_PAN_STEP_PX as i32);
+                    true
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    batch.add_pan_y(-(VIEWPORT_PAN_STEP_PX as i32));
+                    true
+                }
+                KeyCode::Char('h') | KeyCode::Left => {
+                    batch.add_pan_x(-(VIEWPORT_PAN_STEP_PX as i32));
+                    true
+                }
+                KeyCode::Char('l') | KeyCode::Right => {
+                    batch.add_pan_x(VIEWPORT_PAN_STEP_PX as i32);
+                    true
+                }
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    batch.add_pan_y(self.viewport().height.min(i32::MAX as u32) as i32 / 2);
+                    true
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    batch.add_pan_y(-(self.viewport().height.min(i32::MAX as u32) as i32 / 2));
+                    true
+                }
+                KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    batch.add_pan_y(self.viewport().height.min(i32::MAX as u32) as i32);
+                    true
+                }
+                KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    batch.add_pan_y(-(self.viewport().height.min(i32::MAX as u32) as i32));
+                    true
+                }
+                KeyCode::Char('+') | KeyCode::Char('=') => {
+                    batch.add_zoom(25, None);
+                    true
+                }
+                KeyCode::Char('-') | KeyCode::Char('_') => {
+                    batch.add_zoom(-25, None);
+                    true
+                }
+                _ => false,
+            },
+            Mode::Presentation => match key.code {
+                KeyCode::Right
+                | KeyCode::Down
+                | KeyCode::PageDown
+                | KeyCode::Enter
+                | KeyCode::Char(' ')
+                | KeyCode::Char('l')
+                | KeyCode::Char('j') => {
+                    batch.add_presentation_delta(1);
+                    true
+                }
+                KeyCode::Left
+                | KeyCode::Up
+                | KeyCode::PageUp
+                | KeyCode::Backspace
+                | KeyCode::Char('h')
+                | KeyCode::Char('k') => {
+                    batch.add_presentation_delta(-1);
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    fn try_accumulate_mouse_navigation(
+        &mut self,
+        mouse: MouseEvent,
+        batch: &mut NavigationBatch,
+    ) -> bool {
+        match self.mode {
+            Mode::Normal => match mouse.kind {
+                MouseEventKind::ScrollUp if mouse.modifiers.contains(KeyModifiers::CONTROL) => {
+                    batch.add_zoom(MOUSE_ZOOM_STEP_PERCENT, Some(mouse));
+                    true
+                }
+                MouseEventKind::ScrollDown if mouse.modifiers.contains(KeyModifiers::CONTROL) => {
+                    batch.add_zoom(-MOUSE_ZOOM_STEP_PERCENT, Some(mouse));
+                    true
+                }
+                MouseEventKind::ScrollUp if mouse.modifiers.contains(KeyModifiers::SHIFT) => {
+                    batch.add_pan_x(-(self.mouse_horizontal_scroll_step() as i32));
+                    true
+                }
+                MouseEventKind::ScrollDown if mouse.modifiers.contains(KeyModifiers::SHIFT) => {
+                    batch.add_pan_x(self.mouse_horizontal_scroll_step() as i32);
+                    true
+                }
+                MouseEventKind::ScrollUp => {
+                    batch.add_pan_y(-(self.mouse_vertical_scroll_step() as i32));
+                    true
+                }
+                MouseEventKind::ScrollDown => {
+                    batch.add_pan_y(self.mouse_vertical_scroll_step() as i32);
+                    true
+                }
+                MouseEventKind::ScrollLeft => {
+                    batch.add_pan_x(-(self.mouse_horizontal_scroll_step() as i32));
+                    true
+                }
+                MouseEventKind::ScrollRight => {
+                    batch.add_pan_x(self.mouse_horizontal_scroll_step() as i32);
+                    true
+                }
+                _ => false,
+            },
+            Mode::Presentation => match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left)
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::ScrollRight => {
+                    batch.add_presentation_delta(1);
+                    true
+                }
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollLeft => {
+                    batch.add_presentation_delta(-1);
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    fn apply_navigation_batch(&mut self, batch: NavigationBatch) {
+        if batch.pan_x != 0 {
+            self.pan_horizontal(batch.pan_x);
+        }
+        if batch.pan_y != 0 {
+            self.pan_vertical(batch.pan_y);
+        }
+        if batch.zoom != 0 {
+            if let Some(mouse) = batch.zoom_mouse {
+                self.adjust_zoom_at_mouse(mouse, batch.zoom);
+            } else {
+                self.adjust_zoom(batch.zoom);
+            }
+        }
+        if batch.presentation_delta != 0 {
+            self.advance_presentation(batch.presentation_delta);
+        }
+    }
+
+    fn handle_normal_mouse(&mut self, mouse: MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::ScrollUp if mouse.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.adjust_zoom_at_mouse(mouse, MOUSE_ZOOM_STEP_PERCENT)
+            }
+            MouseEventKind::ScrollDown if mouse.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.adjust_zoom_at_mouse(mouse, -MOUSE_ZOOM_STEP_PERCENT)
+            }
+            MouseEventKind::ScrollUp if mouse.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.pan_horizontal(-(self.mouse_horizontal_scroll_step() as i32))
+            }
+            MouseEventKind::ScrollDown if mouse.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.pan_horizontal(self.mouse_horizontal_scroll_step() as i32)
+            }
+            MouseEventKind::ScrollUp => {
+                self.pan_vertical(-(self.mouse_vertical_scroll_step() as i32))
+            }
+            MouseEventKind::ScrollDown => {
+                self.pan_vertical(self.mouse_vertical_scroll_step() as i32)
+            }
+            MouseEventKind::ScrollLeft => {
+                self.pan_horizontal(-(self.mouse_horizontal_scroll_step() as i32))
+            }
+            MouseEventKind::ScrollRight => {
+                self.pan_horizontal(self.mouse_horizontal_scroll_step() as i32)
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_presentation_mouse(&mut self, mouse: MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left)
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollRight => self.advance_presentation(1),
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollLeft => self.advance_presentation(-1),
+            _ => {}
         }
     }
 
@@ -990,6 +1245,62 @@ impl App {
         self.status = self.default_status();
     }
 
+    fn adjust_zoom_at_mouse(&mut self, mouse: MouseEvent, delta_percent: i16) {
+        let viewport = self.viewport();
+        let old_layout = self.document_layout_for(viewport);
+        let mouse_x = mouse
+            .column
+            .saturating_sub(viewport.area.x)
+            .min(viewport.area.width);
+        let mouse_y = mouse
+            .row
+            .saturating_sub(viewport.area.y)
+            .min(viewport.area.height);
+        let anchor_x = self
+            .viewport_offset
+            .x
+            .saturating_add(u32::from(mouse_x) * u32::from(viewport.cell.width));
+        let anchor_y = self
+            .viewport_offset
+            .y
+            .saturating_add(u32::from(mouse_y) * u32::from(viewport.cell.height));
+        let current_page = current_page_for_scroll(&old_layout, anchor_y, 1)
+            .min(self.document.page_count().saturating_sub(1));
+        let old_page_layout = old_layout.pages.get(current_page).copied();
+
+        let next = (self.zoom_percent as i16 + delta_percent).clamp(25, 400);
+        self.zoom_percent = next as u16;
+
+        let new_layout = self.document_layout_for(viewport);
+        if let (Some(old_page_layout), Some(new_page_layout)) =
+            (old_page_layout, new_layout.pages.get(current_page).copied())
+        {
+            let old_page_left = page_left_px(viewport.width, old_page_layout.bitmap_width);
+            let new_page_left = page_left_px(viewport.width, new_page_layout.bitmap_width);
+            let relative_x =
+                relative_position(anchor_x, old_page_left, old_page_layout.bitmap_width);
+            let relative_y = relative_position(
+                anchor_y,
+                old_page_layout.doc_y,
+                old_page_layout.bitmap_height,
+            );
+            let new_anchor_x = new_page_left
+                .saturating_add((relative_x * new_page_layout.bitmap_width as f32).round() as u32);
+            let new_anchor_y = new_page_layout
+                .doc_y
+                .saturating_add((relative_y * new_page_layout.bitmap_height as f32).round() as u32);
+
+            self.viewport_offset.x =
+                new_anchor_x.saturating_sub(u32::from(mouse_x) * u32::from(viewport.cell.width));
+            self.viewport_offset.y =
+                new_anchor_y.saturating_sub(u32::from(mouse_y) * u32::from(viewport.cell.height));
+        }
+
+        self.clamp_viewport_offset_with(&new_layout, viewport);
+        self.bump_render_nonce();
+        self.status = self.default_status();
+    }
+
     fn reset_zoom(&mut self) {
         self.zoom_percent = 100;
         self.viewport_offset = ViewportOffset::default();
@@ -1035,6 +1346,16 @@ impl App {
         self.count_buffer.clear();
         self.bump_render_nonce();
         self.status = self.default_status();
+    }
+
+    fn mouse_vertical_scroll_step(&self) -> u32 {
+        let viewport = self.viewport();
+        u32::from(viewport.cell.height) * MOUSE_SCROLL_ROWS
+    }
+
+    fn mouse_horizontal_scroll_step(&self) -> u32 {
+        let viewport = self.viewport();
+        u32::from(viewport.cell.width) * MOUSE_SCROLL_COLUMNS
     }
 
     fn update_viewport(&mut self, viewport: ViewportPixels) {
@@ -1380,6 +1701,30 @@ fn offset_with_delta(current: u32, delta: i32, max: u32) -> u32 {
         current.saturating_add(delta as u32).min(max)
     } else {
         current.saturating_sub(delta.unsigned_abs()).min(max)
+    }
+}
+
+fn coalesce_axis_i32(current: i32, delta: i32) -> i32 {
+    if current == 0 || current.signum() == delta.signum() {
+        delta
+    } else {
+        0
+    }
+}
+
+fn coalesce_axis_i16(current: i16, delta: i16) -> i16 {
+    if current == 0 || current.signum() == delta.signum() {
+        delta
+    } else {
+        0
+    }
+}
+
+fn coalesce_axis_isize(current: isize, delta: isize) -> isize {
+    if current == 0 || current.signum() == delta.signum() {
+        delta
+    } else {
+        0
     }
 }
 

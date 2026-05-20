@@ -4,6 +4,13 @@ TermPDF is a terminal PDF reader built with Rust, ratatui, PDFium, and the kitty
 
 It focuses on reader-oriented navigation for kitty-compatible terminals, with image-based PDF rendering instead of text reflow.
 
+## CHANGELOG
+
+### 0.2.0
+
+- Added tmux support through Kitty graphics passthrough. Enable it in `~/.tmux.conf` with `set -g allow-passthrough on`.
+- Added mouse and touchpad navigation for scrolling, horizontal scrolling, zooming with `Ctrl` + scroll, and presentation navigation.
+
 ## Features
 
 - PDFium-backed PDF rendering
@@ -49,6 +56,7 @@ brew install NiJingzhe/termpdf/termpdf
   - `x86_64-unknown-linux-gnu`
   - `aarch64-unknown-linux-gnu`
 - A terminal with kitty graphics protocol support, such as kitty or ghostty
+- tmux is supported when the outer terminal supports Kitty graphics and `set -g allow-passthrough on` is enabled in `~/.tmux.conf`; TermPDF wraps Kitty image commands in tmux passthrough automatically
 - `termpdf` and the matching packaged `libpdfium` in the same directory, unless you explicitly point to another PDFium build with `PDFIUM_LIB_PATH` or `--pdfium-lib`
 
 ### Install From A Release Archive
@@ -56,8 +64,8 @@ brew install NiJingzhe/termpdf/termpdf
 Download the archive for your platform from the GitHub Releases page, then extract it:
 
 ```bash
-tar -xzf termpdf-0.1.0-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.1.0-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.2.0-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.2.0-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 
@@ -75,7 +83,7 @@ If you install the files manually into the filesystem, keep `termpdf` and `libpd
 Build dependencies:
 
 - Rust stable toolchain with `cargo`
-- `gh` or `curl` and `tar`, so the build can download and unpack PDFium automatically
+- `gh` or `curl` and `tar` when using bundled PDFium variants (not required for `TERMPDF_PDFIUM_VARIANT=SYSTEM`)
 - A supported PDFium bundle variant, or another compatible PDFium dynamic library
 
 Set the PDFium variant with an environment variable and build:
@@ -90,8 +98,11 @@ Supported source-build values for `TERMPDF_PDFIUM_VARIANT`:
 - `macos-arm64`
 - `linux-x64-glibc`
 - `linux-arm64-glibc`
+- `SYSTEM`
 
-During the build, TermPDF automatically downloads the matching PDFium archive from `bblanchon/pdfium-binaries` into `.cache/pdfium/`, extracts it, and then copies the matching `libpdfium` next to the binary in `target/<profile>/`.
+When using a bundled variant, TermPDF automatically downloads the matching PDFium archive from `bblanchon/pdfium-binaries` into `.cache/pdfium/`, extracts it, and then copies the matching `libpdfium` next to the binary in `target/<profile>/`.
+
+When set to `SYSTEM`, the build skips PDFium download/copy in `build.rs` and uses your system PDFium at runtime (or a path provided by `PDFIUM_LIB_PATH` / `--pdfium-lib`).
 
 ### Packaging Notes
 
@@ -122,7 +133,7 @@ For an AUR binary package on `x86_64`, unpack the release tarball and install th
 
 ## Usage
 
-For source builds, set `TERMPDF_PDFIUM_VARIANT` to the bundle that matches your machine.
+For source builds, set `TERMPDF_PDFIUM_VARIANT` to the bundle that matches your machine, or set it to `SYSTEM` to use system PDFium.
 
 ```bash
 TERMPDF_PDFIUM_VARIANT=linux-x64-glibc cargo run -- path/to/file.pdf
@@ -149,6 +160,7 @@ Supported values:
 - `macos-arm64`
 - `linux-x64-glibc`
 - `linux-arm64-glibc`
+- `SYSTEM` (skip download/copy; use system PDFium)
 
 Example:
 
@@ -166,7 +178,9 @@ The build currently supports automatic PDFium downloads for:
 - `linux-x64-glibc`
 - `linux-arm64-glibc`
 
-When `TERMPDF_PDFIUM_VARIANT` is set, `build.rs` downloads the matching PDFium archive if needed, caches it in `.cache/pdfium/`, and copies the matching `libpdfium` into `target/<profile>/`, so both `cargo run` and the final executable can load the packaged dynamic library from the binary directory.
+When `TERMPDF_PDFIUM_VARIANT` is set to one of the bundled variants above, `build.rs` downloads the matching PDFium archive if needed, caches it in `.cache/pdfium/`, and copies the matching `libpdfium` into `target/<profile>/`, so both `cargo run` and the final executable can load the packaged dynamic library from the binary directory.
+
+When `TERMPDF_PDFIUM_VARIANT=SYSTEM`, `build.rs` skips bundling and relies on system PDFium resolution at runtime.
 
 The older Cargo feature based bundle selection still works, but the recommended path for development is the environment variable above.
 

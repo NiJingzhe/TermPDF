@@ -1,4 +1,7 @@
-use termpdf::platform::{likely_supports_kitty_graphics_for_env, running_inside_tmux_for_env};
+use termpdf::kitty::KittyTransport;
+use termpdf::platform::{
+    kitty_transport_for_env, likely_supports_kitty_graphics_for_env, running_inside_tmux_for_env,
+};
 
 #[test]
 fn detects_tmux_by_term_name() {
@@ -22,6 +25,28 @@ fn rejects_non_tmux_terminal() {
         Some("xterm-256color".to_string()),
         None,
     ));
+}
+
+#[test]
+fn selects_tmux_passthrough_transport_inside_tmux() {
+    assert_eq!(
+        kitty_transport_for_env(
+            Some("tmux-256color".to_string()),
+            Some("/tmp/tmux-1000/default,123,0".to_string()),
+        ),
+        KittyTransport::TmuxPassthrough {
+            pane_left: 0,
+            pane_top: 0,
+        },
+    );
+}
+
+#[test]
+fn selects_direct_transport_outside_tmux() {
+    assert_eq!(
+        kitty_transport_for_env(Some("xterm-kitty".to_string()), None),
+        KittyTransport::Direct,
+    );
 }
 
 #[test]
