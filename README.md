@@ -26,6 +26,14 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 
 ## Install
 
+### For Arch Linux with AUR
+
+```bash
+yay -S tpdf
+```
+
+### For Mac:
+
 Homebrew tap:
 
 ```bash
