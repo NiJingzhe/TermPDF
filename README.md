@@ -1,5 +1,7 @@
 # TermPDF
 
+> **[中文 README 点这里](README.zh-CN.md)**
+
 TermPDF is a terminal PDF reader built with Rust, ratatui, PDFium, and the kitty image protocol.
 
 It focuses on reader-oriented navigation for kitty-compatible terminals, with image-based PDF rendering instead of text reflow.
