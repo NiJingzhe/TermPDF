@@ -1,11 +1,11 @@
 use ratatui::layout::Rect;
 use termpdf::document::{Document, Page, PdfRect};
 use termpdf::render::{
+    ACTIVE_SEARCH_HIGHLIGHT_RGBA, CellPixels, FrameOffsets, OverlayPlacement, PageRenderCache,
+    PageRenderInfo, RenderedPage, SEARCH_HIGHLIGHT_RGBA, ViewportOffset, ViewportPixels,
     build_document_layout, build_highlight_mask, build_page_render_plan, build_visible_page_plans,
     compose_visible_page_frame, compose_visible_page_frame_with_offsets, current_page_for_scroll,
-    invert_rgba_in_place, viewport_pixels, CellPixels, FrameOffsets, OverlayPlacement,
-    PageRenderCache, PageRenderInfo, RenderedPage, ViewportOffset, ViewportPixels,
-    ACTIVE_SEARCH_HIGHLIGHT_RGBA, SEARCH_HIGHLIGHT_RGBA,
+    invert_rgba_in_place, viewport_pixels,
 };
 
 #[test]
@@ -789,7 +789,7 @@ fn compose_visible_page_frame_centers_narrow_page_in_viewport() {
         crop_height: 4,
         placement_columns: 4,
         placement_rows: 4,
-        rgba: vec![255, 0, 0, 255].repeat(8),
+        rgba: [255, 0, 0, 255].repeat(8),
     };
 
     let frame = compose_visible_page_frame(
@@ -825,7 +825,7 @@ fn compose_visible_page_frame_applies_dark_mode_and_search_highlights() {
         crop_height: 2,
         placement_columns: 2,
         placement_rows: 1,
-        rgba: vec![20, 40, 60, 255].repeat(8),
+        rgba: [20, 40, 60, 255].repeat(8),
     };
 
     let frame = compose_visible_page_frame(

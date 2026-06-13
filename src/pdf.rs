@@ -3,7 +3,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use color_eyre::eyre::{bail, OptionExt, Result, WrapErr};
+use color_eyre::eyre::{OptionExt, Result, WrapErr, bail};
 use pdfium_render::prelude::*;
 
 use crate::document::{Document, Glyph, LinkTarget, Page, PageLink, PdfLine, PdfRect};
@@ -97,18 +97,20 @@ impl PdfBackendOptions {
         let mut watch_mode = false;
 
         while let Some(arg) = args.next() {
-            if arg == PathBuf::from("-w") || arg == PathBuf::from("--watch") {
+            if arg.as_os_str() == std::ffi::OsStr::new("-w")
+                || arg.as_os_str() == std::ffi::OsStr::new("--watch")
+            {
                 watch_mode = true;
                 continue;
             }
 
-            if arg == PathBuf::from("--pdfium-lib") {
+            if arg.as_os_str() == std::ffi::OsStr::new("--pdfium-lib") {
                 let value = args.next().ok_or_eyre("missing value for --pdfium-lib")?;
                 pdfium_lib_path = Some(value);
                 continue;
             }
 
-            if arg == PathBuf::from("--dark") {
+            if arg.as_os_str() == std::ffi::OsStr::new("--dark") {
                 dark_mode = true;
                 continue;
             }

@@ -25,6 +25,7 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 - Presentation mode
 - Dark mode toggle
 - Watch mode with live PDF reload
+- Agent and LLM-oriented layout pack extraction with stable refs
 
 ## Install
 
@@ -152,6 +153,56 @@ If PDFium is not available in the system library path, TermPDF will try the down
 ```bash
 cargo run -- path/to/file.pdf --pdfium-lib /path/to/pdfium
 ```
+
+## Layout Pack Extraction
+
+TermPDF can extract a stable layout pack for agents, LLMs, search pipelines, and other CLI tools:
+
+```bash
+termpdf extract path/to/file.pdf --out path/to/file.layout
+```
+
+If `--out` is omitted, TermPDF writes next to the source PDF with a `.layout` suffix:
+
+```bash
+termpdf extract paper.pdf
+# writes paper.layout/
+```
+
+Use `--overwrite` to replace an existing TermPDF layout pack:
+
+```bash
+termpdf extract paper.pdf --overwrite
+```
+
+Each layout pack contains:
+
+- `manifest.json`: schema, TermPDF version, source PDF hash, coordinate system, and file map
+- `pages.jsonl`: one page record per line
+- `blocks.jsonl`: text line and link records
+- `glyphs.jsonl`: one precise glyph record per visible character
+- `refs.jsonl`: a global reference registry for quick lookup
+
+Stable refs use one-based, type-namespaced addresses:
+
+```text
+p1           page 1
+p1.t1        page 1, text line 1
+p1.t1.c1     page 1, text line 1, character 1
+p1.link1     page 1, link 1
+```
+
+The layout schema is `termpdf.layout.v1`. Bboxes use PDF points with a bottom-left origin, matching PDFium extraction and TermPDF rendering projection.
+
+Search a layout pack and return stable refs with `grep`:
+
+```bash
+termpdf grep "method" paper.layout
+termpdf grep "method" paper.layout --refs-only
+termpdf grep "method|approach" paper.layout --regex --json
+```
+
+By default, `grep` treats the pattern as literal text and prints `ref<TAB>text`. Use `--ignore-case` for case-insensitive search and `--regex` when the pattern should be interpreted as a regular expression.
 
 ## Build Environment
 

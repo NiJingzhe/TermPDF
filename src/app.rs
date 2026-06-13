@@ -182,12 +182,12 @@ pub fn run(
             needs_redraw = false;
         }
 
-        if let Some(watch_state) = watch_state.as_mut() {
-            if let Some(document) = maybe_reload_document(backend, session, watch_state)? {
-                app.replace_document_preserving_view_position(document);
-                needs_redraw = true;
-                continue;
-            }
+        if let Some(watch_state) = watch_state.as_mut()
+            && let Some(document) = maybe_reload_document(backend, session, watch_state)?
+        {
+            app.replace_document_preserving_view_position(document);
+            needs_redraw = true;
+            continue;
         }
 
         if options.watch_mode {

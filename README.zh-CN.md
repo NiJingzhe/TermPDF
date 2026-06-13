@@ -25,6 +25,7 @@ TermPDF 是一个终端 PDF 阅读器，使用 Rust、ratatui、PDFium 和 Kitty
 - 演示模式
 - 深色模式切换
 - 监听模式，支持 PDF 实时重载
+- 面向 Agent 和 LLM 的 layout pack 抽取，并提供稳定 refs
 
 ## 安装
 
@@ -152,6 +153,56 @@ TERMPDF_PDFIUM_VARIANT=linux-x64-glibc cargo run -- path/to/file.pdf -w
 ```bash
 cargo run -- path/to/file.pdf --pdfium-lib /path/to/pdfium
 ```
+
+## Layout Pack 抽取
+
+TermPDF 可以为 Agent、LLM、搜索流水线和其他 CLI 工具抽取稳定的 layout pack：
+
+```bash
+termpdf extract path/to/file.pdf --out path/to/file.layout
+```
+
+如果省略 `--out`，TermPDF 会在源 PDF 旁边写入 `.layout` 后缀目录：
+
+```bash
+termpdf extract paper.pdf
+# 写入 paper.layout/
+```
+
+使用 `--overwrite` 替换已有的 TermPDF layout pack：
+
+```bash
+termpdf extract paper.pdf --overwrite
+```
+
+每个 layout pack 包含：
+
+- `manifest.json`：schema、TermPDF 版本、源 PDF hash、坐标系统和文件映射
+- `pages.jsonl`：每页一条记录
+- `blocks.jsonl`：文本行和链接记录
+- `glyphs.jsonl`：每个可见字符一条精确 glyph 记录
+- `refs.jsonl`：用于快速查询的全局引用注册表
+
+稳定 refs 使用一基编号和类型命名空间：
+
+```text
+p1           第 1 页
+p1.t1        第 1 页第 1 条文本行
+p1.t1.c1     第 1 页第 1 条文本行的第 1 个字符
+p1.link1     第 1 页第 1 个链接
+```
+
+layout schema 为 `termpdf.layout.v1`。bbox 使用 PDF points，原点在左下角，与 PDFium 抽取和 TermPDF 渲染投影保持一致。
+
+使用 `grep` 搜索 layout pack 并返回稳定 refs：
+
+```bash
+termpdf grep "method" paper.layout
+termpdf grep "method" paper.layout --refs-only
+termpdf grep "method|approach" paper.layout --regex --json
+```
+
+默认情况下，`grep` 会把 pattern 当作普通文本，并输出 `ref<TAB>text`。使用 `--ignore-case` 进行大小写不敏感搜索；使用 `--regex` 时，pattern 会按正则表达式解释。
 
 ## 构建环境
 

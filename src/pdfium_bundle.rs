@@ -61,11 +61,7 @@ where
     let selected = BUNDLED_PDFIUM_VARIANTS
         .iter()
         .copied()
-        .filter(|variant| {
-            enabled
-                .iter()
-                .any(|feature| *feature == variant.feature_name)
-        })
+        .filter(|variant| enabled.contains(&variant.feature_name))
         .collect::<Vec<_>>();
 
     match selected.as_slice() {

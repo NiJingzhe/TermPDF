@@ -108,13 +108,13 @@ pub fn wrap_command_for_transport(command: &str, transport: KittyTransport) -> S
 }
 
 fn wrap_command_for_tmux(command: &str, pane_left: u16, pane_top: u16) -> String {
-    if let Some((row, col, remaining)) = split_leading_cursor_position(command) {
-        if remaining.starts_with(ESCAPE_PREFIX) {
-            let row = row.saturating_add(pane_top);
-            let col = col.saturating_add(pane_left);
-            let command = format!("\x1b7\x1b[{row};{col}H{remaining}\x1b8");
-            return wrap_tmux_passthrough(&command);
-        }
+    if let Some((row, col, remaining)) = split_leading_cursor_position(command)
+        && remaining.starts_with(ESCAPE_PREFIX)
+    {
+        let row = row.saturating_add(pane_top);
+        let col = col.saturating_add(pane_left);
+        let command = format!("\x1b7\x1b[{row};{col}H{remaining}\x1b8");
+        return wrap_tmux_passthrough(&command);
     }
 
     wrap_kitty_sequences_for_tmux(command)

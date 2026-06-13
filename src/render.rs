@@ -225,6 +225,7 @@ pub fn compose_visible_page_frame(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn compose_visible_page_frame_with_offsets(
     source: &RenderedPage,
     page_bbox: PdfRect,
@@ -704,6 +705,7 @@ fn invert_visible_region_with_offset(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn blend_pdf_rect_highlight(
     rgba: &mut [u8],
     frame_width: u32,
@@ -734,6 +736,7 @@ fn blend_pdf_rect_highlight(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn blend_follow_tag(
     rgba: &mut [u8],
     frame_width: u32,
@@ -797,6 +800,7 @@ pub fn follow_tag_badge_size(label: &str) -> (u32, u32) {
     (width.max(1), height.max(1))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_glyph_5x7_scaled(
     rgba: &mut [u8],
     frame_width: u32,

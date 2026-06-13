@@ -92,7 +92,7 @@ fn download_pdfium_archive(archive_name: &str, archive_path: &Path) {
         return;
     }
 
-    if let Ok(status) = Command::new("gh")
+    match Command::new("gh")
         .args([
             "release",
             "download",
@@ -106,9 +106,8 @@ fn download_pdfium_archive(archive_name: &str, archive_path: &Path) {
         .arg(archive_path)
         .status()
     {
-        if status.success() {
-            return;
-        }
+        Ok(status) if status.success() => return,
+        _ => {}
     }
 
     let url = format!(
