@@ -75,8 +75,8 @@ brew install NiJingzhe/termpdf/termpdf
 Download the archive for your platform from the GitHub Releases page, then extract it:
 
 ```bash
-tar -xzf termpdf-0.2.0-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.2.0-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.3.0-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.3.0-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 

@@ -75,8 +75,8 @@ brew install NiJingzhe/termpdf/termpdf
 从 GitHub Releases 页面下载适合你平台的压缩包，然后解压：
 
 ```bash
-tar -xzf termpdf-0.2.0-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.2.0-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.3.0-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.3.0-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 
