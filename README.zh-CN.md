@@ -8,10 +8,12 @@ TermPDF 是一个终端 PDF 阅读器，使用 Rust、ratatui、PDFium 和 Kitty
 
 ## 更新日志
 
-### 未发布
+### 0.3.1
 
 - 新增普通模式下的可见 block 光标，支持 Vim 风格文本光标移动（`h`、`j`、`k`、`l`、`w`、`b`、`^`、`$`）及 count 支持。
-- 新增 visual 字符选择（`v`）、visual 行选择（`V`）和剪贴板复制（`y`），以纯文本复制到系统剪贴板，使用平台剪贴板命令（`pbcopy`、`wl-copy`、`xclip`、`xsel`、`clip`）。
+- 新增 visual 字符选择（`v`）、visual 行选择（`V`）、visual block 选择（`Ctrl-v`）和剪贴板复制（`y`），以纯文本复制到系统剪贴板，使用平台剪贴板命令（`pbcopy`、`wl-copy`、`xclip`、`xsel`、`clip`）。
+- 重做状态栏：左侧带颜色的 mode indicator（NORMAL / VISUAL / V-LINE / V-BLOCK），用竖线分隔符与上下文相关的 keybinding chips 区分。
+- 普通模式显示 `/ search`、`f links`、`m mark`、`F5 present`、`q quit`；visual 模式显示 `y copy`。
 - 改进 PDF 行聚类算法，使用 glyph 中心线和垂直重叠判断同一行，并增加二阶段合并，将小型内联标注（上标、下标、脚注标记）合并回源顺序相邻的正文行，避免产生多余的单 glyph 行。
 - `termpdf grep` 默认改为正则表达式搜索；使用 `--literal` 进行普通文本匹配。
 
@@ -75,8 +77,8 @@ brew install NiJingzhe/termpdf/termpdf
 从 GitHub Releases 页面下载适合你平台的压缩包，然后解压：
 
 ```bash
-tar -xzf termpdf-0.3.0-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.3.0-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.3.1-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.3.1-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 
@@ -279,6 +281,7 @@ TERMPDF_PDFIUM_VARIANT=linux-x64-glibc cargo build --release
 - `f` / `F`：打开可见链接
 - `v`：普通 visual 字符选择
 - `V`：visual 行选择
+- `Ctrl-v`：visual block 选择
 - `y`：把当前 visual 选择以纯文本复制到系统剪贴板
 - `m<char>` / `` `<char> ``：设置标记并跳转到标记
 - `F5`：演示模式
