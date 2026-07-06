@@ -49,7 +49,7 @@ fn run_grep(options: GrepOptions) -> color_eyre::Result<()> {
     let matches = grep_layout_pack(
         &options.layout_dir,
         &options.pattern,
-        LayoutGrepOptions::new(options.ignore_case, options.regex_mode),
+        LayoutGrepOptions::new(options.ignore_case, options.literal),
     )?;
 
     if options.json {

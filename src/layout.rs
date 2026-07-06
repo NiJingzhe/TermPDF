@@ -208,14 +208,14 @@ pub struct LayoutPack {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayoutGrepOptions {
     pub ignore_case: bool,
-    pub regex_mode: bool,
+    pub literal: bool,
 }
 
 impl LayoutGrepOptions {
-    pub const fn new(ignore_case: bool, regex_mode: bool) -> Self {
+    pub const fn new(ignore_case: bool, literal: bool) -> Self {
         Self {
             ignore_case,
-            regex_mode,
+            literal,
         }
     }
 }
@@ -408,10 +408,10 @@ pub fn grep_layout_pack(
     }
 
     ensure_layout_pack_dir(layout_dir)?;
-    let pattern = if options.regex_mode {
-        pattern.to_string()
-    } else {
+    let pattern = if options.literal {
         regex::escape(pattern)
+    } else {
+        pattern.to_string()
     };
     let regex = RegexBuilder::new(&pattern)
         .case_insensitive(options.ignore_case)

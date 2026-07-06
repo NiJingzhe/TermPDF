@@ -8,6 +8,13 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 
 ## CHANGELOG
 
+### Unreleased
+
+- Added a visible block cursor in normal mode with Vim-style text cursor motions (`h`, `j`, `k`, `l`, `w`, `b`, `^`, `$`) and count support.
+- Added visual character selection (`v`), visual line selection (`V`), and clipboard copy (`y`) as plain text using platform clipboard commands (`pbcopy`, `wl-copy`, `xclip`, `xsel`, `clip`).
+- Improved PDF line clustering to use glyph center lines and vertical overlap, with a second pass that merges small inline annotations (superscripts, subscripts, footnote markers) into their source-adjacent body line instead of creating spurious single-glyph lines.
+- Changed `termpdf grep` to default to regular expression search; use `--literal` for plain text matching.
+
 ### 0.2.0
 
 - Added tmux support through Kitty graphics passthrough. Enable it in `~/.tmux.conf` with `set -g allow-passthrough on`.
@@ -26,6 +33,7 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 - Dark mode toggle
 - Watch mode with live PDF reload
 - Agent and LLM-oriented layout pack extraction with stable refs
+- Vim-style visual selection with clipboard copy as plain text
 
 ## Install
 
@@ -199,10 +207,11 @@ Search a layout pack and return stable refs with `grep`:
 ```bash
 termpdf grep "method" paper.layout
 termpdf grep "method" paper.layout --refs-only
-termpdf grep "method|approach" paper.layout --regex --json
+termpdf grep "method|approach" paper.layout --json
+termpdf grep "literal.dot" paper.layout --literal
 ```
 
-By default, `grep` treats the pattern as literal text and prints `ref<TAB>text`. Use `--ignore-case` for case-insensitive search and `--regex` when the pattern should be interpreted as a regular expression.
+By default, `grep` treats the pattern as a regular expression and prints `ref<TAB>text`. Use `--ignore-case` for case-insensitive search and `--literal` when the pattern should be treated as plain text.
 
 ## Build Environment
 
@@ -260,12 +269,17 @@ Each release archive contains:
 
 ## Keybindings
 
-- `h j k l`: pan viewport
+- `h` / `j` / `k` / `l`: move the text cursor
+- `w` / `b` / `^` / `$`: move by word or line boundary
+- `H` / `J` / `K` / `L`: pan viewport
 - `Ctrl-u` / `Ctrl-d`: half-page up/down
 - `Ctrl-b` / `Ctrl-f`: full-page back/forward
 - `gg`, `{count}gg`, `G`: jump to page
 - `/`, `n`, `N`, `Esc`: search, navigate results, hide highlights
 - `f` / `F`: follow visible links
+- `v`: visual character selection
+- `V`: visual line selection
+- `y`: copy the active visual selection to the system clipboard as plain text
 - `m<char>` / `` `<char> ``: set and jump to marks
 - `F5`: presentation mode
 - `=` / `-` / `0`: zoom in / out / reset

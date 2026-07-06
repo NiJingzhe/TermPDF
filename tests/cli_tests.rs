@@ -133,7 +133,7 @@ fn extract_uses_default_pdfium_library_path() {
 }
 
 #[test]
-fn parses_grep_command_defaults_to_literal_human_output() {
+fn parses_grep_command_defaults_to_regex_human_output() {
     let parsed =
         TermpdfCommand::parse_for_tests(["termpdf", "grep", "alpha beta", "sample.layout"], None)
             .unwrap();
@@ -144,7 +144,7 @@ fn parses_grep_command_defaults_to_literal_human_output() {
             layout_dir: PathBuf::from("sample.layout"),
             pattern: "alpha beta".to_string(),
             ignore_case: false,
-            regex_mode: false,
+            literal: false,
             json: false,
             refs_only: false,
         })
@@ -160,7 +160,6 @@ fn parses_grep_command_flags() {
             "alpha.*beta",
             "sample.layout",
             "--ignore-case",
-            "--regex",
             "--json",
         ],
         None,
@@ -173,8 +172,35 @@ fn parses_grep_command_flags() {
             layout_dir: PathBuf::from("sample.layout"),
             pattern: "alpha.*beta".to_string(),
             ignore_case: true,
-            regex_mode: true,
+            literal: false,
             json: true,
+            refs_only: false,
+        })
+    );
+}
+
+#[test]
+fn parses_grep_literal_flag() {
+    let parsed = TermpdfCommand::parse_for_tests(
+        [
+            "termpdf",
+            "grep",
+            "alpha|beta",
+            "sample.layout",
+            "--literal",
+        ],
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        parsed,
+        TermpdfCommand::Grep(GrepOptions {
+            layout_dir: PathBuf::from("sample.layout"),
+            pattern: "alpha|beta".to_string(),
+            ignore_case: false,
+            literal: true,
+            json: false,
             refs_only: false,
         })
     );

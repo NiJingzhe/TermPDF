@@ -178,8 +178,8 @@ fn event_batch_coalesces_repeated_key_pans() {
     let mut one = App::new(common::sample_document());
     let mut many = App::new(common::sample_document());
 
-    one.handle_events([Event::Key(KeyEvent::from(KeyCode::Char('j')))]);
-    many.handle_events((0..20).map(|_| Event::Key(KeyEvent::from(KeyCode::Char('j')))));
+    one.handle_events([Event::Key(KeyEvent::from(KeyCode::Char('J')))]);
+    many.handle_events((0..20).map(|_| Event::Key(KeyEvent::from(KeyCode::Char('J')))));
 
     assert_eq!(many.viewport_offset().y, one.viewport_offset().y);
 }
@@ -189,8 +189,8 @@ fn event_batch_cancels_reversed_key_pans() {
     let mut app = App::new(common::sample_document());
 
     app.handle_events([
-        Event::Key(KeyEvent::from(KeyCode::Char('j'))),
-        Event::Key(KeyEvent::from(KeyCode::Char('k'))),
+        Event::Key(KeyEvent::from(KeyCode::Char('J'))),
+        Event::Key(KeyEvent::from(KeyCode::Char('K'))),
     ]);
 
     assert_eq!(app.viewport_offset().y, 0);
@@ -261,14 +261,14 @@ fn m_and_backtick_store_and_restore_marks() {
     let document = common::sample_document();
     let mut app = App::new(document);
 
-    app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('J')));
     let marked_offset = app.viewport_offset();
 
     app.handle_key(KeyEvent::from(KeyCode::Char('m')));
     assert_eq!(app.mode(), Mode::SetMark);
     app.handle_key(KeyEvent::from(KeyCode::Char('a')));
 
-    app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('J')));
     assert_ne!(app.viewport_offset(), marked_offset);
 
     app.handle_key(KeyEvent::from(KeyCode::Char('`')));
@@ -365,6 +365,219 @@ fn i_key_toggles_dark_mode() {
 }
 
 #[test]
+fn v_enters_visual_mode_and_tracks_character_selection() {
+    let (mut app, _clipboard) = App::with_memory_clipboard_for_tests(common::sample_document());
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+
+    assert_eq!(app.mode(), Mode::Visual);
+    assert_eq!(app.selected_text().as_deref(), Some("alpha"));
+    assert_eq!(app.selection_ranges().len(), 1);
+    assert_eq!(app.selection_ranges()[0].start_glyph, 0);
+    assert_eq!(app.selection_ranges()[0].end_glyph, 4);
+    assert!(app.selection_bounds_for_page(0).len() == 1);
+    assert!(app.cursor_bounds_for_page(0).is_none());
+}
+
+#[test]
+fn normal_mode_exposes_visible_cursor_bounds() {
+    let app = App::new(common::sample_document());
+
+    assert!(app.cursor_bounds_for_page(app.cursor_page()).is_some());
+}
+
+#[test]
+fn normal_mode_h_and_l_move_text_cursor_without_selection() {
+    let mut app = App::new(common::sample_document());
+
+    for _ in 0..20 {
+        app.handle_key(KeyEvent::from(KeyCode::Char('h')));
+    }
+    let left = app.text_cursor();
+    app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+
+    assert_eq!(app.mode(), Mode::Normal);
+    assert_eq!(left.glyph, 0);
+    assert_eq!(app.text_cursor().glyph, 1);
+    assert!(app.selected_text().is_none());
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('h')));
+    assert_eq!(app.text_cursor().glyph, 0);
+}
+
+#[test]
+fn normal_mode_j_and_k_move_text_cursor_one_line_at_a_time() {
+    let mut app = App::new(common::sample_document());
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+
+    assert_eq!(app.text_cursor().line, 0);
+    app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+    assert_eq!(app.text_cursor().line, 1);
+    app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+    assert_eq!(app.text_cursor().line, 2);
+    app.handle_key(KeyEvent::from(KeyCode::Char('k')));
+    assert_eq!(app.text_cursor().line, 1);
+    assert!(app.selected_text().is_none());
+}
+
+#[test]
+fn normal_mode_counted_j_moves_exact_line_count() {
+    let mut app = App::new(sample_document_with_pages(1, 6));
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+
+    assert_eq!(app.text_cursor().line, 3);
+}
+
+#[test]
+fn normal_mode_supports_word_and_line_boundary_motions() {
+    let mut app = App::new(Document {
+        pages: vec![Page::from_text(0, &["  alpha beta", "gamma delta"])],
+    });
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('^')));
+    assert_eq!(app.text_cursor().glyph, 2);
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('w')));
+    assert_eq!(app.text_cursor().glyph, 8);
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('$')));
+    assert_eq!(app.text_cursor().glyph, 11);
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('b')));
+    assert_eq!(app.text_cursor().glyph, 8);
+}
+
+#[test]
+fn normal_mode_counted_w_crosses_lines() {
+    let mut app = App::new(Document {
+        pages: vec![Page::from_text(0, &["alpha beta", "gamma delta"])],
+    });
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('2')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('w')));
+
+    assert_eq!(app.text_cursor().line, 1);
+    assert_eq!(app.text_cursor().glyph, 0);
+}
+
+#[test]
+fn uppercase_hjkl_pan_viewport() {
+    let mut app = App::new(common::sample_document());
+    app.handle_key(KeyEvent::from(KeyCode::Char('=')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('=')));
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('L')));
+    let after_right = app.viewport_offset().x;
+    app.handle_key(KeyEvent::from(KeyCode::Char('H')));
+
+    assert!(after_right > 0);
+    assert!(app.viewport_offset().x < after_right);
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('J')));
+    let after_down = app.viewport_offset().y;
+    app.handle_key(KeyEvent::from(KeyCode::Char('K')));
+
+    assert!(after_down > 0);
+    assert!(app.viewport_offset().y < after_down);
+}
+
+#[test]
+fn visual_mode_y_copies_selected_text_and_exits() {
+    let (mut app, clipboard) = App::with_memory_clipboard_for_tests(common::sample_document());
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+    for _ in 0..4 {
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+    }
+    app.handle_key(KeyEvent::from(KeyCode::Char('y')));
+
+    assert_eq!(app.mode(), Mode::Normal);
+    assert_eq!(clipboard.text().as_deref(), Some("alpha"));
+    assert!(app.selected_text().is_none());
+    assert!(app.status().contains("copied"));
+}
+
+#[test]
+fn visual_mode_supports_word_and_line_boundary_motions() {
+    let (mut app, _clipboard) = App::with_memory_clipboard_for_tests(Document {
+        pages: vec![Page::from_text(0, &["alpha beta", "gamma delta"])],
+    });
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('w')));
+
+    assert_eq!(app.mode(), Mode::Visual);
+    assert_eq!(app.text_cursor().glyph, 6);
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('$')));
+    assert_eq!(app.text_cursor().glyph, 9);
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('b')));
+    assert_eq!(app.text_cursor().glyph, 6);
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('^')));
+    assert_eq!(app.text_cursor().glyph, 0);
+}
+
+#[test]
+fn shift_v_selects_whole_lines_for_copy() {
+    let (mut app, clipboard) = App::with_memory_clipboard_for_tests(common::sample_document());
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('V')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('y')));
+
+    assert_eq!(app.mode(), Mode::Normal);
+    assert_eq!(clipboard.text().as_deref(), Some("alpha beta\nbeta gamma"));
+}
+
+#[test]
+fn visual_line_mode_does_not_overlay_character_cursor() {
+    let (mut app, _clipboard) = App::with_memory_clipboard_for_tests(common::sample_document());
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('V')));
+
+    assert_eq!(app.mode(), Mode::VisualLine);
+    assert!(app.cursor_bounds_for_page(0).is_none());
+    assert_eq!(app.selection_bounds_for_page(0).len(), 1);
+}
+
+#[test]
+fn escape_exits_visual_mode_without_copying() {
+    let (mut app, clipboard) = App::with_memory_clipboard_for_tests(common::sample_document());
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+    app.handle_key(KeyEvent::from(KeyCode::Esc));
+
+    assert_eq!(app.mode(), Mode::Normal);
+    assert!(clipboard.text().is_none());
+    assert!(app.selected_text().is_none());
+}
+
+#[test]
 fn current_page_match_bounds_returns_all_visible_matches() {
     let document = common::sample_document();
     let mut app = App::new(document);
@@ -394,9 +607,9 @@ fn active_match_bounds_disappear_when_scroll_centers_other_page() {
     app.handle_key(KeyEvent::from(KeyCode::Enter));
     assert!(app.active_match_bounds().is_some());
 
-    app.handle_key(KeyEvent::from(KeyCode::Char('j')));
-    app.handle_key(KeyEvent::from(KeyCode::Char('j')));
-    app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('J')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('J')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('J')));
 
     assert!(app.current_page_match_bounds().is_empty());
     assert!(app.active_match_bounds().is_none());

@@ -256,14 +256,14 @@ fn grep_layout_pack_returns_matching_text_line_refs() {
 }
 
 #[test]
-fn grep_layout_pack_supports_ignore_case_and_regex() {
+fn grep_layout_pack_defaults_to_regex_and_supports_ignore_case() {
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("sample.layout");
     let pack = LayoutPack::from_document(&document_with_links(), source_metadata());
     pack.write_to_dir(&output, LayoutWriteOptions::new(false))
         .unwrap();
 
-    let literal = grep_layout_pack(
+    let ignore_case = grep_layout_pack(
         &output,
         "ALPHA",
         termpdf::layout::LayoutGrepOptions::new(true, false),
@@ -272,12 +272,37 @@ fn grep_layout_pack_supports_ignore_case_and_regex() {
     let regex = grep_layout_pack(
         &output,
         r"alpha\s+beta",
+        termpdf::layout::LayoutGrepOptions::new(false, false),
+    )
+    .unwrap();
+
+    assert_eq!(ignore_case[0].ref_id, "p1.t1");
+    assert_eq!(regex[0].ref_id, "p1.t1");
+}
+
+#[test]
+fn grep_layout_pack_literal_mode_escapes_regex_metacharacters() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("sample.layout");
+    let pack = LayoutPack::from_document(&document_with_links(), source_metadata());
+    pack.write_to_dir(&output, LayoutWriteOptions::new(false))
+        .unwrap();
+
+    let regex = grep_layout_pack(
+        &output,
+        "alpha|gamma",
+        termpdf::layout::LayoutGrepOptions::new(false, false),
+    )
+    .unwrap();
+    let literal = grep_layout_pack(
+        &output,
+        "alpha|gamma",
         termpdf::layout::LayoutGrepOptions::new(false, true),
     )
     .unwrap();
 
-    assert_eq!(literal[0].ref_id, "p1.t1");
-    assert_eq!(regex[0].ref_id, "p1.t1");
+    assert_eq!(regex.len(), 2);
+    assert!(literal.is_empty());
 }
 
 #[test]
@@ -300,7 +325,7 @@ fn grep_layout_pack_rejects_empty_or_invalid_patterns() {
         grep_layout_pack(
             &output,
             "[",
-            termpdf::layout::LayoutGrepOptions::new(false, true),
+            termpdf::layout::LayoutGrepOptions::new(false, false),
         )
         .is_err()
     );

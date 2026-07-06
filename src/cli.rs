@@ -27,7 +27,7 @@ pub struct GrepOptions {
     pub layout_dir: PathBuf,
     pub pattern: String,
     pub ignore_case: bool,
-    pub regex_mode: bool,
+    pub literal: bool,
     pub json: bool,
     pub refs_only: bool,
 }
@@ -36,7 +36,27 @@ pub struct GrepOptions {
 #[command(
     name = "termpdf",
     about = "Terminal PDF viewer and layout extractor with kitty image protocol",
-    after_help = "Keybindings:\n  hjkl                Pan viewport\n  Ctrl-u / Ctrl-d     Half-page up/down\n  Ctrl-b / Ctrl-f     Full-page back/forward\n  gg / {count}gg / G  Jump to page\n  /, n, N, Esc        Search, navigate, hide highlight\n  f / F               Follow visible links\n  m<char> / `<char>   Set and jump to marks\n  F5                  Presentation mode\n  = / - / 0           Zoom in / out / reset\n  i                   Toggle dark mode\n  q                   Quit"
+    long_about = "Terminal PDF viewer and layout extractor with kitty image protocol.\n\n\
+        Subcommands:\n  \
+        termpdf <file.pdf>              Open the terminal viewer\n  \
+        termpdf extract <file.pdf>     Extract a stable layout pack\n  \
+        termpdf grep <pattern> <dir>   Search a layout pack with regex by default\n\n\
+        Run `termpdf <subcommand> --help` for subcommand-specific options.",
+    after_help = "Viewer keybindings:\n  \
+        h, j, k, l           Move text cursor\n  \
+        w, b, ^, $           Move by word or line boundary\n  \
+        H, J, K, L           Pan viewport\n  \
+        Ctrl-u / Ctrl-d      Half-page up/down\n  \
+        Ctrl-b / Ctrl-f      Full-page back/forward\n  \
+        gg / {count}gg / G  Jump to page\n  \
+        /, n, N, Esc         Search, navigate, hide highlight\n  \
+        f / F                Follow visible links\n  \
+        v / V / y            Select text/lines and copy to clipboard\n  \
+        m<char> / `<char>    Set and jump to marks\n  \
+        F5                   Presentation mode\n  \
+        = / - / 0            Zoom in / out / reset\n  \
+        i                    Toggle dark mode\n  \
+        q                    Quit"
 )]
 struct CliOptions {
     #[command(subcommand)]
@@ -96,10 +116,7 @@ struct ExtractCliOptions {
 
 #[derive(Args, Debug)]
 struct GrepCliOptions {
-    #[arg(
-        value_name = "PATTERN",
-        help = "Literal text or regex pattern to search for"
-    )]
+    #[arg(value_name = "PATTERN", help = "Regex pattern to search for")]
     pattern: String,
 
     #[arg(value_name = "LAYOUT_DIR", help = "TermPDF layout pack directory")]
@@ -109,11 +126,10 @@ struct GrepCliOptions {
     ignore_case: bool,
 
     #[arg(
-        short = 'E',
-        long = "regex",
-        help = "Interpret PATTERN as a regular expression"
+        long = "literal",
+        help = "Interpret PATTERN as literal text instead of a regular expression"
     )]
-    regex_mode: bool,
+    literal: bool,
 
     #[arg(long = "json", help = "Print structured JSON results")]
     json: bool,
@@ -186,7 +202,7 @@ impl TermpdfCommand {
                     layout_dir: grep.layout_dir,
                     pattern: grep.pattern,
                     ignore_case: grep.ignore_case,
-                    regex_mode: grep.regex_mode,
+                    literal: grep.literal,
                     json: grep.json,
                     refs_only: grep.refs_only,
                 }))

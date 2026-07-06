@@ -12,7 +12,13 @@ use crate::pdfium_bundle::{
 };
 use crate::render::{PageRenderCache, PageRenderPlan, RenderedPage};
 
-const LINE_MERGE_TOLERANCE_FACTOR: f32 = 0.6;
+const LINE_CENTER_TOLERANCE_FACTOR: f32 = 0.4;
+const LINE_OVERLAP_MIN_RATIO: f32 = 0.65;
+const INLINE_ANNOTATION_MAX_HEIGHT_FACTOR: f32 = 0.85;
+const INLINE_ANNOTATION_MIN_TARGET_HEIGHT_FACTOR: f32 = 1.15;
+const INLINE_ANNOTATION_MAX_CENTER_DISTANCE_FACTOR: f32 = 1.0;
+const INLINE_ANNOTATION_MAX_VERTICAL_GAP_FACTOR: f32 = 0.35;
+const INLINE_ANNOTATION_MAX_HORIZONTAL_GAP_FACTOR: f32 = 2.0;
 
 pub struct PdfBackend {
     pdfium: &'static Pdfium,
@@ -58,6 +64,7 @@ struct RawGlyph {
     ch: char,
     bbox: PdfRect,
     page: usize,
+    source_index: usize,
 }
 
 impl PdfBackendOptions {
@@ -378,6 +385,7 @@ fn raw_glyph_from_pdfium(page_index: usize, char: PdfPageTextChar<'_>) -> Result
             bounds.height().value,
         ),
         page: page_index,
+        source_index: char.index(),
     }))
 }
 
@@ -394,48 +402,10 @@ fn group_glyphs_into_lines(mut glyphs: Vec<RawGlyph>) -> Vec<PdfLine> {
         }
     }
 
-    lines
-        .into_iter()
-        .map(|mut line| {
-            line.sort_by(|left, right| {
-                left.bbox
-                    .x
-                    .partial_cmp(&right.bbox.x)
-                    .unwrap_or(Ordering::Equal)
-            });
+    merge_inline_annotation_clusters(&mut lines);
+    lines.sort_by(|left, right| compare_line_clusters_for_reading_order(left, right));
 
-            let min_x = line
-                .iter()
-                .map(|glyph| glyph.bbox.x)
-                .fold(f32::INFINITY, f32::min);
-            let min_y = line
-                .iter()
-                .map(|glyph| glyph.bbox.y)
-                .fold(f32::INFINITY, f32::min);
-            let max_x = line
-                .iter()
-                .map(|glyph| glyph.bbox.x + glyph.bbox.width)
-                .fold(f32::NEG_INFINITY, f32::max);
-            let max_y = line
-                .iter()
-                .map(|glyph| glyph.bbox.y + glyph.bbox.height)
-                .fold(f32::NEG_INFINITY, f32::max);
-
-            let glyphs = line
-                .into_iter()
-                .map(|glyph| Glyph {
-                    ch: glyph.ch,
-                    bbox: glyph.bbox,
-                    page: glyph.page,
-                })
-                .collect::<Vec<_>>();
-
-            PdfLine {
-                glyphs,
-                bbox: PdfRect::new(min_x, min_y, max_x - min_x, max_y - min_y),
-            }
-        })
-        .collect()
+    lines.into_iter().map(raw_line_to_pdf_line).collect()
 }
 
 fn compare_glyphs_for_reading_order(left: &RawGlyph, right: &RawGlyph) -> Ordering {
@@ -456,9 +426,317 @@ fn compare_glyphs_for_reading_order(left: &RawGlyph, right: &RawGlyph) -> Orderi
 }
 
 fn same_visual_line(line: &[RawGlyph], glyph: &RawGlyph) -> bool {
-    let avg_y = line.iter().map(|item| item.bbox.y).sum::<f32>() / line.len() as f32;
-    let avg_height = line.iter().map(|item| item.bbox.height).sum::<f32>() / line.len() as f32;
-    let tolerance = (avg_height * LINE_MERGE_TOLERANCE_FACTOR).max(1.0);
+    let line_center = median_glyph_center_y(line);
+    let line_height = median_glyph_height(line).max(1.0);
+    let glyph_center = rect_center_y(glyph.bbox);
+    let glyph_height = glyph.bbox.height.max(1.0);
+    let center_delta = (glyph_center - line_center).abs();
+    let center_tolerance = (line_height.min(glyph_height) * LINE_CENTER_TOLERANCE_FACTOR).max(1.0);
 
-    (glyph.bbox.y - avg_y).abs() <= tolerance
+    if center_delta <= center_tolerance {
+        return true;
+    }
+
+    let line_band = PdfRect::new(0.0, line_center - line_height / 2.0, 0.0, line_height);
+    let overlap = vertical_overlap_ratio(line_band, glyph.bbox);
+
+    overlap >= LINE_OVERLAP_MIN_RATIO && center_delta <= line_height.max(glyph_height) * 0.55
+}
+
+fn merge_inline_annotation_clusters(lines: &mut Vec<Vec<RawGlyph>>) {
+    let mut index = 0;
+
+    while index < lines.len() {
+        let Some(target_index) = inline_annotation_target(lines, index) else {
+            index += 1;
+            continue;
+        };
+
+        let annotation = lines.remove(index);
+        let target_index = if target_index > index {
+            target_index - 1
+        } else {
+            target_index
+        };
+        lines[target_index].extend(annotation);
+    }
+}
+
+fn inline_annotation_target(lines: &[Vec<RawGlyph>], annotation_index: usize) -> Option<usize> {
+    let annotation_bbox = raw_line_bbox(&lines[annotation_index]);
+    let annotation_height = annotation_bbox.height.max(1.0);
+    let annotation_center = rect_center_y(annotation_bbox);
+    let annotation_source_span = source_span(&lines[annotation_index]);
+
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(candidate_index, _)| *candidate_index != annotation_index)
+        .filter_map(|(candidate_index, candidate)| {
+            let candidate_bbox = raw_line_bbox(candidate);
+            let candidate_height = candidate_bbox.height.max(1.0);
+
+            if annotation_height > candidate_height * INLINE_ANNOTATION_MAX_HEIGHT_FACTOR {
+                return None;
+            }
+
+            if candidate_height < annotation_height * INLINE_ANNOTATION_MIN_TARGET_HEIGHT_FACTOR {
+                return None;
+            }
+
+            let center_delta = (annotation_center - rect_center_y(candidate_bbox)).abs();
+            if center_delta > candidate_height * INLINE_ANNOTATION_MAX_CENTER_DISTANCE_FACTOR {
+                return None;
+            }
+
+            let vertical_gap = vertical_gap(annotation_bbox, candidate_bbox);
+            if vertical_gap > candidate_height * INLINE_ANNOTATION_MAX_VERTICAL_GAP_FACTOR {
+                return None;
+            }
+
+            let horizontal_gap = horizontal_gap(annotation_bbox, candidate_bbox);
+            if horizontal_gap > candidate_height * INLINE_ANNOTATION_MAX_HORIZONTAL_GAP_FACTOR {
+                return None;
+            }
+
+            let source_gap = source_gap(annotation_source_span, source_span(candidate));
+            Some((
+                candidate_index,
+                source_gap,
+                center_delta,
+                vertical_gap,
+                horizontal_gap,
+            ))
+        })
+        .min_by(|left, right| {
+            left.1
+                .cmp(&right.1)
+                .then_with(|| left.2.partial_cmp(&right.2).unwrap_or(Ordering::Equal))
+                .then_with(|| left.3.partial_cmp(&right.3).unwrap_or(Ordering::Equal))
+                .then_with(|| left.4.partial_cmp(&right.4).unwrap_or(Ordering::Equal))
+        })
+        .map(|(candidate_index, _, _, _, _)| candidate_index)
+}
+
+fn compare_line_clusters_for_reading_order(left: &[RawGlyph], right: &[RawGlyph]) -> Ordering {
+    let y_cmp = median_glyph_center_y(right)
+        .partial_cmp(&median_glyph_center_y(left))
+        .unwrap_or(Ordering::Equal);
+
+    if y_cmp == Ordering::Equal {
+        min_x(left)
+            .partial_cmp(&min_x(right))
+            .unwrap_or(Ordering::Equal)
+    } else {
+        y_cmp
+    }
+}
+
+fn raw_line_to_pdf_line(mut line: Vec<RawGlyph>) -> PdfLine {
+    line.sort_by(|left, right| {
+        left.bbox
+            .x
+            .partial_cmp(&right.bbox.x)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                right
+                    .bbox
+                    .y
+                    .partial_cmp(&left.bbox.y)
+                    .unwrap_or(Ordering::Equal)
+            })
+    });
+
+    let bbox = raw_line_bbox(&line);
+    let glyphs = line
+        .into_iter()
+        .map(|glyph| Glyph {
+            ch: glyph.ch,
+            bbox: glyph.bbox,
+            page: glyph.page,
+        })
+        .collect::<Vec<_>>();
+
+    PdfLine { glyphs, bbox }
+}
+
+fn raw_line_bbox(line: &[RawGlyph]) -> PdfRect {
+    let min_x = line
+        .iter()
+        .map(|glyph| glyph.bbox.x)
+        .fold(f32::INFINITY, f32::min);
+    let min_y = line
+        .iter()
+        .map(|glyph| glyph.bbox.y)
+        .fold(f32::INFINITY, f32::min);
+    let max_x = line
+        .iter()
+        .map(|glyph| glyph.bbox.x + glyph.bbox.width)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let max_y = line
+        .iter()
+        .map(|glyph| glyph.bbox.y + glyph.bbox.height)
+        .fold(f32::NEG_INFINITY, f32::max);
+
+    PdfRect::new(min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+fn median_glyph_center_y(line: &[RawGlyph]) -> f32 {
+    median(line.iter().map(|glyph| rect_center_y(glyph.bbox)).collect())
+}
+
+fn median_glyph_height(line: &[RawGlyph]) -> f32 {
+    median(line.iter().map(|glyph| glyph.bbox.height).collect())
+}
+
+fn median(mut values: Vec<f32>) -> f32 {
+    values.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+
+    let middle = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        (values[middle - 1] + values[middle]) / 2.0
+    } else {
+        values[middle]
+    }
+}
+
+fn rect_center_y(rect: PdfRect) -> f32 {
+    rect.y + rect.height / 2.0
+}
+
+fn vertical_overlap_ratio(left: PdfRect, right: PdfRect) -> f32 {
+    let overlap = (left.y + left.height).min(right.y + right.height) - left.y.max(right.y);
+    if overlap <= 0.0 {
+        return 0.0;
+    }
+
+    overlap / left.height.min(right.height).max(1.0)
+}
+
+fn vertical_gap(left: PdfRect, right: PdfRect) -> f32 {
+    if left.y > right.y + right.height {
+        left.y - (right.y + right.height)
+    } else if right.y > left.y + left.height {
+        right.y - (left.y + left.height)
+    } else {
+        0.0
+    }
+}
+
+fn horizontal_gap(left: PdfRect, right: PdfRect) -> f32 {
+    if left.x > right.x + right.width {
+        left.x - (right.x + right.width)
+    } else if right.x > left.x + left.width {
+        right.x - (left.x + left.width)
+    } else {
+        0.0
+    }
+}
+
+fn min_x(line: &[RawGlyph]) -> f32 {
+    line.iter()
+        .map(|glyph| glyph.bbox.x)
+        .fold(f32::INFINITY, f32::min)
+}
+
+fn source_span(line: &[RawGlyph]) -> (usize, usize) {
+    line.iter()
+        .map(|glyph| glyph.source_index)
+        .fold((usize::MAX, 0), |(min, max), source_index| {
+            (min.min(source_index), max.max(source_index))
+        })
+}
+
+fn source_gap(left: (usize, usize), right: (usize, usize)) -> usize {
+    if left.1 < right.0 {
+        right.0 - left.1
+    } else if right.1 < left.0 {
+        left.0.saturating_sub(right.1)
+    } else {
+        0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn superscript_cluster_merges_with_source_adjacent_line() {
+        let glyphs = vec![
+            raw_glyph('A', 0.0, 120.0, 10.0, 10.0, 0),
+            raw_glyph('B', 10.0, 120.0, 10.0, 10.0, 1),
+            raw_glyph('C', 20.0, 120.0, 10.0, 10.0, 2),
+            raw_glyph('D', 30.0, 120.0, 10.0, 10.0, 3),
+            raw_glyph('a', 0.0, 100.0, 10.0, 10.0, 4),
+            raw_glyph('b', 10.0, 100.0, 10.0, 10.0, 5),
+            raw_glyph('1', 20.0, 111.0, 5.0, 6.0, 6),
+            raw_glyph('c', 25.0, 100.0, 10.0, 10.0, 7),
+            raw_glyph('d', 35.0, 100.0, 10.0, 10.0, 8),
+        ];
+
+        let lines = group_glyphs_into_lines(glyphs);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text(), "ABCD");
+        assert_eq!(lines[1].text(), "ab1cd");
+    }
+
+    #[test]
+    fn subscript_cluster_merges_with_source_adjacent_line() {
+        let glyphs = vec![
+            raw_glyph('H', 0.0, 100.0, 10.0, 10.0, 0),
+            raw_glyph('2', 10.0, 96.0, 5.0, 6.0, 1),
+            raw_glyph('O', 20.0, 100.0, 10.0, 10.0, 2),
+        ];
+
+        let lines = group_glyphs_into_lines(glyphs);
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text(), "H2O");
+    }
+
+    #[test]
+    fn distant_small_text_stays_separate() {
+        let mut glyphs = raw_text_line("body", 120.0, 10.0, 0);
+        glyphs.extend(raw_text_line("cap", 80.0, 6.0, 4));
+
+        let lines = group_glyphs_into_lines(glyphs);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text(), "body");
+        assert_eq!(lines[1].text(), "cap");
+    }
+
+    fn raw_text_line(text: &str, y: f32, height: f32, source_index_offset: usize) -> Vec<RawGlyph> {
+        text.chars()
+            .enumerate()
+            .map(|(index, ch)| {
+                raw_glyph(
+                    ch,
+                    index as f32 * 10.0,
+                    y,
+                    10.0,
+                    height,
+                    source_index_offset + index,
+                )
+            })
+            .collect()
+    }
+
+    fn raw_glyph(
+        ch: char,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        source_index: usize,
+    ) -> RawGlyph {
+        RawGlyph {
+            ch,
+            bbox: PdfRect::new(x, y, width, height),
+            page: 0,
+            source_index,
+        }
+    }
 }

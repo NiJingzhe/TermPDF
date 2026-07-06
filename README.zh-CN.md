@@ -8,6 +8,13 @@ TermPDF 是一个终端 PDF 阅读器，使用 Rust、ratatui、PDFium 和 Kitty
 
 ## 更新日志
 
+### 未发布
+
+- 新增普通模式下的可见 block 光标，支持 Vim 风格文本光标移动（`h`、`j`、`k`、`l`、`w`、`b`、`^`、`$`）及 count 支持。
+- 新增 visual 字符选择（`v`）、visual 行选择（`V`）和剪贴板复制（`y`），以纯文本复制到系统剪贴板，使用平台剪贴板命令（`pbcopy`、`wl-copy`、`xclip`、`xsel`、`clip`）。
+- 改进 PDF 行聚类算法，使用 glyph 中心线和垂直重叠判断同一行，并增加二阶段合并，将小型内联标注（上标、下标、脚注标记）合并回源顺序相邻的正文行，避免产生多余的单 glyph 行。
+- `termpdf grep` 默认改为正则表达式搜索；使用 `--literal` 进行普通文本匹配。
+
 ### 0.2.0
 
 - 新增通过 Kitty 图形透传实现的 tmux 支持。在 `~/.tmux.conf` 中启用 `set -g allow-passthrough on` 即可使用。
@@ -26,6 +33,7 @@ TermPDF 是一个终端 PDF 阅读器，使用 Rust、ratatui、PDFium 和 Kitty
 - 深色模式切换
 - 监听模式，支持 PDF 实时重载
 - 面向 Agent 和 LLM 的 layout pack 抽取，并提供稳定 refs
+- Vim 风格 visual 选择，并以纯文本复制到剪贴板
 
 ## 安装
 
@@ -199,10 +207,11 @@ layout schema 为 `termpdf.layout.v1`。bbox 使用 PDF points，原点在左下
 ```bash
 termpdf grep "method" paper.layout
 termpdf grep "method" paper.layout --refs-only
-termpdf grep "method|approach" paper.layout --regex --json
+termpdf grep "method|approach" paper.layout --json
+termpdf grep "literal.dot" paper.layout --literal
 ```
 
-默认情况下，`grep` 会把 pattern 当作普通文本，并输出 `ref<TAB>text`。使用 `--ignore-case` 进行大小写不敏感搜索；使用 `--regex` 时，pattern 会按正则表达式解释。
+默认情况下，`grep` 会把 pattern 当作正则表达式，并输出 `ref<TAB>text`。使用 `--ignore-case` 进行大小写不敏感搜索；使用 `--literal` 时，pattern 会按普通文本解释。
 
 ## 构建环境
 
@@ -260,12 +269,17 @@ TERMPDF_PDFIUM_VARIANT=linux-x64-glibc cargo build --release
 
 ## 快捷键
 
-- `h j k l`：平移视口
+- `h` / `j` / `k` / `l`：移动文本光标
+- `w` / `b` / `^` / `$`：按词或行边界移动光标
+- `H` / `J` / `K` / `L`：平移视口
 - `Ctrl-u` / `Ctrl-d`：向上/向下半页
 - `Ctrl-b` / `Ctrl-f`：向前/向后一整页
 - `gg`、`{count}gg`、`G`：跳转到页面
 - `/`、`n`、`N`、`Esc`：搜索、浏览结果、隐藏高亮
 - `f` / `F`：打开可见链接
+- `v`：普通 visual 字符选择
+- `V`：visual 行选择
+- `y`：把当前 visual 选择以纯文本复制到系统剪贴板
 - `m<char>` / `` `<char> ``：设置标记并跳转到标记
 - `F5`：演示模式
 - `=` / `-` / `0`：放大、缩小、重置缩放
