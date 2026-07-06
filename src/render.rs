@@ -12,6 +12,8 @@ pub const PAGE_GAP_PX: u32 = 24;
 pub const PAGE_PRELOAD_RADIUS: usize = 5;
 pub const SEARCH_HIGHLIGHT_RGBA: [u8; 4] = [255, 235, 59, 96];
 pub const ACTIVE_SEARCH_HIGHLIGHT_RGBA: [u8; 4] = [255, 193, 7, 160];
+pub const SELECTION_HIGHLIGHT_RGBA: [u8; 4] = [3, 169, 244, 120];
+pub const CURSOR_HIGHLIGHT_RGBA: [u8; 4] = SELECTION_HIGHLIGHT_RGBA;
 pub const FOLLOW_TAG_BG_RGBA: [u8; 4] = [255, 235, 59, 255];
 pub const FOLLOW_TAG_FG_RGBA: [u8; 4] = [0, 0, 0, 255];
 const FOLLOW_TAG_FONT_SCALE: u32 = 2;
@@ -204,6 +206,7 @@ pub fn build_highlight_mask(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn compose_visible_page_frame(
     source: &RenderedPage,
     page_bbox: PdfRect,
@@ -211,6 +214,8 @@ pub fn compose_visible_page_frame(
     dark_mode: bool,
     passive_highlights: &[PdfRect],
     active_highlight: Option<PdfRect>,
+    selection_highlights: &[PdfRect],
+    cursor_highlight: Option<PdfRect>,
     follow_tags: &[FollowTag],
 ) -> RenderedPage {
     compose_visible_page_frame_with_offsets(
@@ -220,11 +225,14 @@ pub fn compose_visible_page_frame(
         dark_mode,
         passive_highlights,
         active_highlight,
+        selection_highlights,
+        cursor_highlight,
         follow_tags,
         None,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn compose_visible_page_frame_with_offsets(
     source: &RenderedPage,
     page_bbox: PdfRect,
@@ -232,6 +240,8 @@ pub fn compose_visible_page_frame_with_offsets(
     dark_mode: bool,
     passive_highlights: &[PdfRect],
     active_highlight: Option<PdfRect>,
+    selection_highlights: &[PdfRect],
+    cursor_highlight: Option<PdfRect>,
     follow_tags: &[FollowTag],
     frame_offsets: Option<FrameOffsets>,
 ) -> RenderedPage {
@@ -303,6 +313,36 @@ pub fn compose_visible_page_frame_with_offsets(
             page_bbox,
             bounds,
             ACTIVE_SEARCH_HIGHLIGHT_RGBA,
+        );
+    }
+
+    for bounds in selection_highlights {
+        blend_pdf_rect_highlight(
+            &mut rgba,
+            frame_width,
+            copy_width,
+            copy_height,
+            frame_offset_x,
+            frame_offset_y,
+            source,
+            page_bbox,
+            *bounds,
+            SELECTION_HIGHLIGHT_RGBA,
+        );
+    }
+
+    if let Some(bounds) = cursor_highlight {
+        blend_pdf_rect_highlight(
+            &mut rgba,
+            frame_width,
+            copy_width,
+            copy_height,
+            frame_offset_x,
+            frame_offset_y,
+            source,
+            page_bbox,
+            bounds,
+            CURSOR_HIGHLIGHT_RGBA,
         );
     }
 
@@ -704,6 +744,7 @@ fn invert_visible_region_with_offset(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn blend_pdf_rect_highlight(
     rgba: &mut [u8],
     frame_width: u32,
@@ -734,6 +775,7 @@ fn blend_pdf_rect_highlight(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn blend_follow_tag(
     rgba: &mut [u8],
     frame_width: u32,
@@ -797,6 +839,7 @@ pub fn follow_tag_badge_size(label: &str) -> (u32, u32) {
     (width.max(1), height.max(1))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_glyph_5x7_scaled(
     rgba: &mut [u8],
     frame_width: u32,

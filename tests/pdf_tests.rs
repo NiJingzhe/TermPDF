@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use termpdf::document::PdfRect;
-use termpdf::pdf::{resolve_pdfium_lib_path_for_tests, PdfBackendOptions};
+use termpdf::pdf::{PdfBackendOptions, resolve_pdfium_lib_path_for_tests};
 use termpdf::render::{PageRenderCache, PageRenderInfo, RenderedPage};
 
 #[test]

@@ -1,10 +1,10 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as TextLine, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
-use ratatui::Frame;
 
-use crate::app::{App, Mode};
+use crate::app::{App, Mode, TextCursor, TextSelectionRange};
 use crate::document::PdfRect;
 use crate::render::{CellPixels, OverlayPlacement};
 
@@ -78,6 +78,12 @@ fn document_paragraph(app: &App, area: Rect) -> Paragraph<'static> {
 
     let active_line = app.cursor_line();
     let active_match = app.active_search_match();
+    let text_cursor = if app.mode() == Mode::Normal {
+        Some(app.text_cursor())
+    } else {
+        None
+    };
+    let selection_ranges = app.selection_ranges();
 
     let lines = page
         .lines
@@ -97,7 +103,14 @@ fn document_paragraph(app: &App, area: Rect) -> Paragraph<'static> {
                 style = style.add_modifier(Modifier::BOLD).fg(Color::Cyan);
             }
 
-            TextLine::from(Span::styled(line.text(), style))
+            TextLine::from(line_spans(
+                app.cursor_page(),
+                line_index,
+                &line.text(),
+                style,
+                text_cursor,
+                &selection_ranges,
+            ))
         })
         .collect::<Vec<_>>();
 
@@ -117,6 +130,10 @@ fn status_paragraph(app: &App) -> Paragraph<'static> {
     let chips = vec![
         mode_prefix(app.mode()),
         status_chip("/", "search", Color::Yellow, Color::Black),
+        separator(),
+        status_chip("v", "visual", Color::Cyan, Color::Black),
+        separator(),
+        status_chip("y", "copy", Color::Green, Color::Black),
         separator(),
         status_chip("f", "links", Color::Cyan, Color::Black),
         separator(),
@@ -151,8 +168,54 @@ fn mode_prefix(mode: Mode) -> Span<'static> {
         Mode::Follow => status_chip("FOLLOW", "", Color::Cyan, Color::Black),
         Mode::SetMark => status_chip("MARK", "", Color::Magenta, Color::Black),
         Mode::JumpMark => status_chip("JUMP", "", Color::Magenta, Color::Black),
+        Mode::Visual => status_chip("VISUAL", "", Color::Cyan, Color::Black),
+        Mode::VisualLine => status_chip("V-LINE", "", Color::Cyan, Color::Black),
         Mode::Presentation => status_chip("PRESENT", "", Color::Blue, Color::White),
     }
+}
+
+fn line_spans(
+    page: usize,
+    line: usize,
+    text: &str,
+    base_style: Style,
+    cursor: Option<TextCursor>,
+    selection_ranges: &[TextSelectionRange],
+) -> Vec<Span<'static>> {
+    let selection = selection_ranges
+        .iter()
+        .find(|range| range.page == page && range.line == line)
+        .copied();
+    let cursor = cursor.filter(|cursor| cursor.page == page && cursor.line == line);
+    if selection.is_none() && cursor.is_none() {
+        return vec![Span::styled(text.to_string(), base_style)];
+    }
+
+    text.chars()
+        .enumerate()
+        .map(|(glyph_index, ch)| {
+            let mut style = base_style;
+            if selection
+                .map(|range| {
+                    glyph_index >= range.start_glyph.min(range.end_glyph)
+                        && glyph_index <= range.start_glyph.max(range.end_glyph)
+                })
+                .unwrap_or(false)
+            {
+                style = style.fg(Color::White).bg(Color::Blue);
+            }
+            if cursor
+                .map(|cursor| cursor.glyph == glyph_index)
+                .unwrap_or(false)
+            {
+                style = style
+                    .fg(Color::White)
+                    .bg(Color::Blue)
+                    .add_modifier(Modifier::BOLD);
+            }
+            Span::styled(ch.to_string(), style)
+        })
+        .collect()
 }
 
 fn separator() -> Span<'static> {

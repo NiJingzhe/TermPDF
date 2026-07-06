@@ -1,8 +1,10 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 
 use crossterm::event::{
@@ -50,6 +52,25 @@ impl RunOptions {
     }
 }
 
+impl ClipboardBackend {
+    fn memory() -> (Self, ClipboardCapture) {
+        let capture = ClipboardCapture {
+            text: Rc::new(RefCell::new(None)),
+        };
+        (Self::Memory(capture.clone()), capture)
+    }
+
+    fn copy(&self, text: &str) -> io::Result<()> {
+        match self {
+            Self::System => copy_to_system_clipboard(text),
+            Self::Memory(capture) => {
+                *capture.text.borrow_mut() = Some(text.to_string());
+                Ok(())
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct FileWatchState {
     path: PathBuf,
@@ -63,7 +84,41 @@ pub enum Mode {
     Follow,
     SetMark,
     JumpMark,
+    Visual,
+    VisualLine,
     Presentation,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TextCursor {
+    pub page: usize,
+    pub line: usize,
+    pub glyph: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextSelectionRange {
+    pub page: usize,
+    pub line: usize,
+    pub start_glyph: usize,
+    pub end_glyph: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct ClipboardCapture {
+    text: Rc<RefCell<Option<String>>>,
+}
+
+impl ClipboardCapture {
+    pub fn text(&self) -> Option<String> {
+        self.text.borrow().clone()
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ClipboardBackend {
+    System,
+    Memory(ClipboardCapture),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,6 +201,9 @@ pub struct App {
     follow_cluster_rotations: HashMap<FollowClusterKey, usize>,
     marks: HashMap<char, ViewMark>,
     presentation_page: Option<usize>,
+    text_cursor: Option<TextCursor>,
+    visual_anchor: Option<TextCursor>,
+    clipboard: ClipboardBackend,
 }
 
 pub fn run(
@@ -182,12 +240,12 @@ pub fn run(
             needs_redraw = false;
         }
 
-        if let Some(watch_state) = watch_state.as_mut() {
-            if let Some(document) = maybe_reload_document(backend, session, watch_state)? {
-                app.replace_document_preserving_view_position(document);
-                needs_redraw = true;
-                continue;
-            }
+        if let Some(watch_state) = watch_state.as_mut()
+            && let Some(document) = maybe_reload_document(backend, session, watch_state)?
+        {
+            app.replace_document_preserving_view_position(document);
+            needs_redraw = true;
+            continue;
         }
 
         if options.watch_mode {
@@ -313,6 +371,8 @@ fn build_document_frames(
             None
         };
         let follow_tags = app.follow_tags_for_page(plan.page_index);
+        let selection_highlights = app.selection_bounds_for_page(plan.page_index);
+        let cursor_highlight = app.cursor_bounds_for_page(plan.page_index);
 
         frames.push(compose_visible_page_frame_with_offsets(
             rendered,
@@ -321,6 +381,8 @@ fn build_document_frames(
             app.dark_mode(),
             &passive_highlights,
             active_highlight,
+            &selection_highlights,
+            cursor_highlight,
             &follow_tags,
             Some(FrameOffsets {
                 x: u32::from(plan.frame_offset_x),
@@ -361,6 +423,8 @@ fn build_presentation_frame(
         None
     };
     let follow_tags = app.follow_tags_for_page(page_index);
+    let selection_highlights = app.selection_bounds_for_page(page_index);
+    let cursor_highlight = app.cursor_bounds_for_page(page_index);
 
     Ok(Some(compose_visible_page_frame(
         rendered,
@@ -369,6 +433,8 @@ fn build_presentation_frame(
         app.dark_mode(),
         &passive_highlights,
         active_highlight,
+        &selection_highlights,
+        cursor_highlight,
         &follow_tags,
     )))
 }
@@ -408,9 +474,19 @@ impl App {
             follow_cluster_rotations: HashMap::new(),
             marks: HashMap::new(),
             presentation_page: None,
+            text_cursor: None,
+            visual_anchor: None,
+            clipboard: ClipboardBackend::System,
         };
         app.status = app.default_status();
         app
+    }
+
+    pub fn with_memory_clipboard_for_tests(document: Document) -> (Self, ClipboardCapture) {
+        let (clipboard, capture) = ClipboardBackend::memory();
+        let mut app = Self::with_optional_path(document, None);
+        app.clipboard = clipboard;
+        (app, capture)
     }
 
     pub fn document(&self) -> &Document {
@@ -480,6 +556,16 @@ impl App {
             self.presentation_page = Some(page_index.min(last_page));
         }
 
+        if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+            self.mode = Mode::Normal;
+            self.visual_anchor = None;
+            self.text_cursor = None;
+        } else {
+            self.text_cursor = self
+                .text_cursor
+                .map(|cursor| self.clamp_text_cursor(cursor));
+        }
+
         self.bump_render_nonce();
         self.status = self.default_status();
     }
@@ -487,6 +573,9 @@ impl App {
     pub fn cursor_page(&self) -> usize {
         if let Some(page_index) = self.presentation_page {
             return page_index;
+        }
+        if let Some(cursor) = self.text_cursor {
+            return self.clamp_text_cursor(cursor).page;
         }
 
         let viewport = self.viewport();
@@ -497,6 +586,9 @@ impl App {
     pub fn cursor_line(&self) -> usize {
         if self.presentation_page.is_some() {
             return 0;
+        }
+        if let Some(cursor) = self.text_cursor {
+            return self.clamp_text_cursor(cursor).line;
         }
 
         let page_index = self.cursor_page();
@@ -546,6 +638,18 @@ impl App {
         self.dark_mode
     }
 
+    pub fn text_cursor(&self) -> TextCursor {
+        self.current_text_cursor()
+    }
+
+    pub fn selection_ranges(&self) -> Vec<TextSelectionRange> {
+        self.visual_selection_ranges()
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        self.visual_selected_text()
+    }
+
     pub fn viewport_offset(&self) -> ViewportOffset {
         self.viewport_offset
     }
@@ -575,6 +679,32 @@ impl App {
     pub fn match_bounds_for_page(&self, page: usize) -> Vec<PdfRect> {
         self.index
             .selection_bounds_for_page_matches(&self.matches, page)
+    }
+
+    pub fn selection_bounds_for_page(&self, page: usize) -> Vec<PdfRect> {
+        self.selection_ranges()
+            .into_iter()
+            .filter(|range| range.page == page)
+            .filter_map(|range| self.selection_range_bounds(range))
+            .collect()
+    }
+
+    pub fn cursor_bounds_for_page(&self, page: usize) -> Option<PdfRect> {
+        if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+            return None;
+        }
+
+        let cursor = self.current_text_cursor();
+        if cursor.page != page {
+            return None;
+        }
+
+        self.document
+            .pages
+            .get(cursor.page)
+            .and_then(|page| page.lines.get(cursor.line))
+            .and_then(|line| line.glyphs.get(cursor.glyph).or_else(|| line.glyphs.last()))
+            .map(|glyph| glyph.bbox)
     }
 
     pub fn visible_follow_hints(&self) -> Vec<VisibleFollowHint> {
@@ -637,6 +767,7 @@ impl App {
             Mode::Follow => self.handle_follow_mode(key),
             Mode::SetMark => self.handle_mark_mode(key, true),
             Mode::JumpMark => self.handle_mark_mode(key, false),
+            Mode::Visual | Mode::VisualLine => self.handle_visual_mode(key),
             Mode::Presentation => self.handle_presentation_mode(key),
         }
     }
@@ -690,19 +821,19 @@ impl App {
         match self.mode {
             Mode::Normal if self.pending_g || !self.count_buffer.is_empty() => false,
             Mode::Normal => match key.code {
-                KeyCode::Char('j') | KeyCode::Down => {
+                KeyCode::Char('J') => {
                     batch.add_pan_y(VIEWPORT_PAN_STEP_PX as i32);
                     true
                 }
-                KeyCode::Char('k') | KeyCode::Up => {
+                KeyCode::Char('K') => {
                     batch.add_pan_y(-(VIEWPORT_PAN_STEP_PX as i32));
                     true
                 }
-                KeyCode::Char('h') | KeyCode::Left => {
+                KeyCode::Char('H') => {
                     batch.add_pan_x(-(VIEWPORT_PAN_STEP_PX as i32));
                     true
                 }
-                KeyCode::Char('l') | KeyCode::Right => {
+                KeyCode::Char('L') => {
                     batch.add_pan_x(VIEWPORT_PAN_STEP_PX as i32);
                     true
                 }
@@ -887,10 +1018,14 @@ impl App {
         match key.code {
             KeyCode::Esc => self.clear_search_highlight_and_reset(),
             KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char('j') | KeyCode::Down => self.pan_vertical_by_count(1),
-            KeyCode::Char('k') | KeyCode::Up => self.pan_vertical_by_count(-1),
-            KeyCode::Char('h') | KeyCode::Left => self.pan_horizontal_by_count(-1),
-            KeyCode::Char('l') | KeyCode::Right => self.pan_horizontal_by_count(1),
+            KeyCode::Char('j') | KeyCode::Down => self.move_text_cursor_vertical_by_count(1),
+            KeyCode::Char('k') | KeyCode::Up => self.move_text_cursor_vertical_by_count(-1),
+            KeyCode::Char('h') | KeyCode::Left => self.move_text_cursor_horizontal_by_count(-1),
+            KeyCode::Char('l') | KeyCode::Right => self.move_text_cursor_horizontal_by_count(1),
+            KeyCode::Char('J') => self.pan_vertical_by_count(1),
+            KeyCode::Char('K') => self.pan_vertical_by_count(-1),
+            KeyCode::Char('H') => self.pan_horizontal_by_count(-1),
+            KeyCode::Char('L') => self.pan_horizontal_by_count(1),
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.pan_by_viewport_fraction(1, 2)
             }
@@ -903,6 +1038,10 @@ impl App {
             KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.pan_by_viewport_fraction(-1, 1)
             }
+            KeyCode::Char('w') => self.move_text_cursor_word_forward_by_count(),
+            KeyCode::Char('b') => self.move_text_cursor_word_backward_by_count(),
+            KeyCode::Char('$') => self.move_text_cursor_to_line_end(),
+            KeyCode::Char('^') => self.move_text_cursor_to_first_non_whitespace(),
             KeyCode::Char('g') => self.handle_gg(),
             KeyCode::Char('G') => self.move_to_last_page(),
             KeyCode::Char('i') => self.toggle_dark_mode(),
@@ -917,6 +1056,8 @@ impl App {
             KeyCode::Char('n') => self.advance_match(true),
             KeyCode::Char('N') => self.advance_match(false),
             KeyCode::Char('f') | KeyCode::Char('F') => self.enter_follow_mode(),
+            KeyCode::Char('v') => self.enter_visual_mode(Mode::Visual),
+            KeyCode::Char('V') => self.enter_visual_mode(Mode::VisualLine),
             KeyCode::Char('m') => {
                 self.mode = Mode::SetMark;
                 self.status = "mark: ".to_string();
@@ -977,6 +1118,637 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn enter_visual_mode(&mut self, mode: Mode) {
+        let cursor = self.current_text_cursor();
+        self.mode = mode;
+        self.text_cursor = Some(cursor);
+        self.visual_anchor = Some(cursor);
+        self.pending_g = false;
+        self.count_buffer.clear();
+        self.bump_render_nonce();
+        self.status = self.visual_status();
+    }
+
+    fn handle_visual_mode(&mut self, key: KeyEvent) {
+        if self.handle_count_prefix(key) {
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc => self.exit_visual_mode(self.default_status()),
+            KeyCode::Char('v') => {
+                if self.mode == Mode::Visual {
+                    self.exit_visual_mode(self.default_status());
+                } else {
+                    self.mode = Mode::Visual;
+                    self.status = self.visual_status();
+                    self.bump_render_nonce();
+                }
+            }
+            KeyCode::Char('V') => {
+                if self.mode == Mode::VisualLine {
+                    self.exit_visual_mode(self.default_status());
+                } else {
+                    self.mode = Mode::VisualLine;
+                    self.status = self.visual_status();
+                    self.bump_render_nonce();
+                }
+            }
+            KeyCode::Char('y') => self.yank_visual_selection(),
+            KeyCode::Char('h') | KeyCode::Left => self.move_text_cursor_horizontal_by_count(-1),
+            KeyCode::Char('l') | KeyCode::Right => self.move_text_cursor_horizontal_by_count(1),
+            KeyCode::Char('j') | KeyCode::Down => self.move_text_cursor_vertical_by_count(1),
+            KeyCode::Char('k') | KeyCode::Up => self.move_text_cursor_vertical_by_count(-1),
+            KeyCode::Char('w') => self.move_text_cursor_word_forward_by_count(),
+            KeyCode::Char('b') => self.move_text_cursor_word_backward_by_count(),
+            KeyCode::Char('$') => self.move_text_cursor_to_line_end(),
+            KeyCode::Char('^') => self.move_text_cursor_to_first_non_whitespace(),
+            _ => {}
+        }
+    }
+
+    fn exit_visual_mode(&mut self, status: String) {
+        let cursor = self
+            .text_cursor
+            .map(|cursor| self.clamp_text_cursor(cursor));
+        self.mode = Mode::Normal;
+        self.visual_anchor = None;
+        self.text_cursor = cursor;
+        self.pending_g = false;
+        self.count_buffer.clear();
+        self.bump_render_nonce();
+        self.status = status;
+    }
+
+    fn yank_visual_selection(&mut self) {
+        let Some(text) = self.visual_selected_text() else {
+            self.exit_visual_mode("nothing selected".to_string());
+            return;
+        };
+        let char_count = text.chars().count();
+        match self.clipboard.copy(&text) {
+            Ok(()) => self.exit_visual_mode(format!("copied {char_count} chars")),
+            Err(error) => self.exit_visual_mode(format!("copy failed: {error}")),
+        }
+    }
+
+    fn move_text_cursor_horizontal(&mut self, delta: isize) {
+        let mut cursor = self.current_text_cursor();
+        let glyph_count = self.line_glyph_count(cursor.page, cursor.line);
+        if glyph_count == 0 {
+            cursor.glyph = 0;
+        } else if delta < 0 {
+            cursor.glyph = cursor.glyph.saturating_sub(delta.unsigned_abs());
+        } else {
+            cursor.glyph = cursor
+                .glyph
+                .saturating_add(delta as usize)
+                .min(glyph_count - 1);
+        }
+        self.set_text_cursor(cursor);
+    }
+
+    fn move_text_cursor_horizontal_by_count(&mut self, direction: isize) {
+        let count = self.take_count_or_one() as isize;
+        self.move_text_cursor_horizontal(direction.saturating_mul(count));
+    }
+
+    fn move_text_cursor_vertical(&mut self, delta: isize) {
+        let mut cursor = self.current_text_cursor();
+        let steps = delta.unsigned_abs();
+        for _ in 0..steps {
+            cursor = if delta >= 0 {
+                self.next_line_cursor(cursor)
+            } else {
+                self.previous_line_cursor(cursor)
+            };
+        }
+        self.set_text_cursor(cursor);
+    }
+
+    fn move_text_cursor_vertical_by_count(&mut self, direction: isize) {
+        let count = self.take_count_or_one() as isize;
+        self.move_text_cursor_vertical(direction.saturating_mul(count));
+    }
+
+    fn move_text_cursor_word_forward_by_count(&mut self) {
+        let count = self.take_count_or_one();
+        let mut cursor = self.current_text_cursor();
+        for _ in 0..count {
+            cursor = self.next_word_start_cursor(cursor);
+        }
+        self.set_text_cursor(cursor);
+    }
+
+    fn move_text_cursor_word_backward_by_count(&mut self) {
+        let count = self.take_count_or_one();
+        let mut cursor = self.current_text_cursor();
+        for _ in 0..count {
+            cursor = self.previous_word_start_cursor(cursor);
+        }
+        self.set_text_cursor(cursor);
+    }
+
+    fn move_text_cursor_to_line_end(&mut self) {
+        self.count_buffer.clear();
+        let mut cursor = self.current_text_cursor();
+        cursor.glyph = self
+            .line_glyph_count(cursor.page, cursor.line)
+            .saturating_sub(1);
+        self.set_text_cursor(cursor);
+    }
+
+    fn move_text_cursor_to_first_non_whitespace(&mut self) {
+        self.count_buffer.clear();
+        let mut cursor = self.current_text_cursor();
+        cursor.glyph = self.first_non_whitespace_glyph(cursor.page, cursor.line);
+        self.set_text_cursor(cursor);
+    }
+
+    fn set_text_cursor(&mut self, cursor: TextCursor) {
+        let cursor = self.clamp_text_cursor(cursor);
+        self.text_cursor = Some(cursor);
+        self.focus_text_cursor(cursor);
+        self.status = if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+            self.visual_status()
+        } else {
+            self.default_status()
+        };
+    }
+
+    fn current_text_cursor(&self) -> TextCursor {
+        if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+            return self
+                .clamp_text_cursor(self.text_cursor.unwrap_or_else(|| self.cursor_at_view()));
+        }
+
+        self.clamp_text_cursor(self.text_cursor.unwrap_or_else(|| self.cursor_at_view()))
+    }
+
+    fn cursor_at_view(&self) -> TextCursor {
+        let page = self.cursor_page();
+        let line = self.cursor_line();
+        let glyph = self.glyph_at_view_center(page, line);
+        self.clamp_text_cursor(TextCursor { page, line, glyph })
+    }
+
+    fn glyph_at_view_center(&self, page: usize, line: usize) -> usize {
+        let viewport = self.viewport();
+        let layout = self.document_layout_for(viewport);
+        let Some(page_layout) = layout.pages.get(page).copied() else {
+            return 0;
+        };
+        let Some(page_ref) = self.document.pages.get(page) else {
+            return 0;
+        };
+        let Some(line_ref) = page_ref.lines.get(line) else {
+            return 0;
+        };
+        let viewport_center_x = self.viewport_offset.x.saturating_add(viewport.width / 2);
+        let page_left = page_left_px(viewport.width, page_layout.bitmap_width);
+        let target_x = viewport_center_x
+            .saturating_sub(page_left)
+            .min(page_layout.bitmap_width);
+
+        line_ref
+            .glyphs
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, glyph)| {
+                project_pdf_center_x_to_page(glyph.bbox, page_ref.bbox, page_layout)
+                    .abs_diff(target_x)
+            })
+            .map(|(glyph_index, _)| glyph_index)
+            .unwrap_or(0)
+    }
+
+    fn clamp_text_cursor(&self, cursor: TextCursor) -> TextCursor {
+        if self.document.pages.is_empty() {
+            return TextCursor::default();
+        }
+
+        let page = cursor.page.min(self.document.pages.len() - 1);
+        let page_ref = &self.document.pages[page];
+        if page_ref.lines.is_empty() {
+            return TextCursor {
+                page,
+                line: 0,
+                glyph: 0,
+            };
+        }
+
+        let line = cursor.line.min(page_ref.lines.len() - 1);
+        let glyph_count = page_ref.lines[line].glyphs.len();
+        let glyph = if glyph_count == 0 {
+            0
+        } else {
+            cursor.glyph.min(glyph_count - 1)
+        };
+
+        TextCursor { page, line, glyph }
+    }
+
+    fn line_glyph_count(&self, page: usize, line: usize) -> usize {
+        self.document
+            .pages
+            .get(page)
+            .and_then(|page| page.lines.get(line))
+            .map(|line| line.glyphs.len())
+            .unwrap_or(0)
+    }
+
+    fn first_non_whitespace_glyph(&self, page: usize, line: usize) -> usize {
+        self.document
+            .pages
+            .get(page)
+            .and_then(|page| page.lines.get(line))
+            .and_then(|line| {
+                line.glyphs
+                    .iter()
+                    .position(|glyph| !glyph.ch.is_whitespace())
+            })
+            .unwrap_or(0)
+    }
+
+    fn next_word_start_cursor(&self, cursor: TextCursor) -> TextCursor {
+        let mut cursor = self.clamp_text_cursor(cursor);
+
+        if self
+            .char_at_text_cursor(cursor)
+            .map(is_word_char)
+            .unwrap_or(false)
+        {
+            while let Some(next) = self.next_text_cursor(cursor) {
+                if next.page != cursor.page || next.line != cursor.line {
+                    cursor = next;
+                    break;
+                }
+                cursor = next;
+                if !self
+                    .char_at_text_cursor(cursor)
+                    .map(is_word_char)
+                    .unwrap_or(false)
+                {
+                    break;
+                }
+            }
+        }
+
+        while !self
+            .char_at_text_cursor(cursor)
+            .map(is_word_char)
+            .unwrap_or(false)
+        {
+            let Some(next) = self.next_text_cursor(cursor) else {
+                return cursor;
+            };
+            cursor = next;
+        }
+
+        cursor
+    }
+
+    fn previous_word_start_cursor(&self, cursor: TextCursor) -> TextCursor {
+        let mut cursor = self.clamp_text_cursor(cursor);
+        while let Some(previous) = self.previous_text_cursor(cursor) {
+            cursor = previous;
+            if self
+                .char_at_text_cursor(cursor)
+                .map(is_word_char)
+                .unwrap_or(false)
+            {
+                break;
+            }
+        }
+
+        while let Some(previous) = self.previous_text_cursor(cursor) {
+            if !self
+                .char_at_text_cursor(previous)
+                .map(is_word_char)
+                .unwrap_or(false)
+            {
+                break;
+            }
+            cursor = previous;
+        }
+
+        cursor
+    }
+
+    fn next_text_cursor(&self, cursor: TextCursor) -> Option<TextCursor> {
+        let cursor = self.clamp_text_cursor(cursor);
+        let page = self.document.pages.get(cursor.page)?;
+        let line = page.lines.get(cursor.line)?;
+        if cursor.glyph + 1 < line.glyphs.len() {
+            return Some(TextCursor {
+                glyph: cursor.glyph + 1,
+                ..cursor
+            });
+        }
+
+        if cursor.line + 1 < page.lines.len() {
+            return Some(self.clamp_text_cursor(TextCursor {
+                line: cursor.line + 1,
+                glyph: 0,
+                ..cursor
+            }));
+        }
+
+        if cursor.page + 1 < self.document.pages.len() {
+            return Some(self.clamp_text_cursor(TextCursor {
+                page: cursor.page + 1,
+                line: 0,
+                glyph: 0,
+            }));
+        }
+
+        None
+    }
+
+    fn previous_text_cursor(&self, cursor: TextCursor) -> Option<TextCursor> {
+        let cursor = self.clamp_text_cursor(cursor);
+        if cursor.glyph > 0 {
+            return Some(TextCursor {
+                glyph: cursor.glyph - 1,
+                ..cursor
+            });
+        }
+
+        if cursor.line > 0 {
+            let previous_line = cursor.line - 1;
+            return Some(
+                self.clamp_text_cursor(TextCursor {
+                    line: previous_line,
+                    glyph: self
+                        .line_glyph_count(cursor.page, previous_line)
+                        .saturating_sub(1),
+                    ..cursor
+                }),
+            );
+        }
+
+        if cursor.page > 0 {
+            let previous_page = cursor.page - 1;
+            let previous_line = self
+                .document
+                .pages
+                .get(previous_page)
+                .map(|page| page.lines.len().saturating_sub(1))
+                .unwrap_or(0);
+            return Some(
+                self.clamp_text_cursor(TextCursor {
+                    page: previous_page,
+                    line: previous_line,
+                    glyph: self
+                        .line_glyph_count(previous_page, previous_line)
+                        .saturating_sub(1),
+                }),
+            );
+        }
+
+        None
+    }
+
+    fn char_at_text_cursor(&self, cursor: TextCursor) -> Option<char> {
+        self.document
+            .pages
+            .get(cursor.page)
+            .and_then(|page| page.lines.get(cursor.line))
+            .and_then(|line| line.glyphs.get(cursor.glyph))
+            .map(|glyph| glyph.ch)
+    }
+
+    fn next_line_cursor(&self, cursor: TextCursor) -> TextCursor {
+        let cursor = self.clamp_text_cursor(cursor);
+        let Some(page) = self.document.pages.get(cursor.page) else {
+            return cursor;
+        };
+
+        if cursor.line + 1 < page.lines.len() {
+            return self.clamp_text_cursor(TextCursor {
+                line: cursor.line + 1,
+                ..cursor
+            });
+        }
+
+        let next_page = (cursor.page + 1).min(self.document.pages.len().saturating_sub(1));
+        self.clamp_text_cursor(TextCursor {
+            page: next_page,
+            line: 0,
+            glyph: cursor.glyph,
+        })
+    }
+
+    fn previous_line_cursor(&self, cursor: TextCursor) -> TextCursor {
+        let cursor = self.clamp_text_cursor(cursor);
+        if cursor.line > 0 {
+            return self.clamp_text_cursor(TextCursor {
+                line: cursor.line - 1,
+                ..cursor
+            });
+        }
+
+        if cursor.page == 0 {
+            return cursor;
+        }
+
+        let previous_page = cursor.page - 1;
+        let previous_line = self
+            .document
+            .pages
+            .get(previous_page)
+            .map(|page| page.lines.len().saturating_sub(1))
+            .unwrap_or(0);
+        self.clamp_text_cursor(TextCursor {
+            page: previous_page,
+            line: previous_line,
+            glyph: cursor.glyph,
+        })
+    }
+
+    fn focus_text_cursor(&mut self, cursor: TextCursor) {
+        let viewport = self.viewport();
+        let layout = self.document_layout_for(viewport);
+        let Some(page_layout) = layout.pages.get(cursor.page).copied() else {
+            return;
+        };
+        let page = &self.document.pages[cursor.page];
+        let line_bbox = page.lines.get(cursor.line).map(|line| line.bbox);
+        let focus_bbox = page
+            .lines
+            .get(cursor.line)
+            .and_then(|line| line.glyphs.get(cursor.glyph).or_else(|| line.glyphs.last()))
+            .map(|glyph| glyph.bbox)
+            .or(line_bbox)
+            .unwrap_or(page.bbox);
+        let focus_x = project_pdf_center_x_to_page(focus_bbox, page.bbox, page_layout);
+        let focus_y = project_pdf_center_y_to_page(focus_bbox, page.bbox, page_layout);
+        let page_left = page_left_px(viewport.width, page_layout.bitmap_width);
+
+        self.viewport_offset.x = page_left
+            .saturating_add(focus_x)
+            .saturating_sub(viewport.width / 2);
+        self.viewport_offset.y = page_layout
+            .doc_y
+            .saturating_add(focus_y)
+            .saturating_sub(viewport.height / 2);
+        self.clamp_viewport_offset_with(&layout, viewport);
+        self.bump_render_nonce();
+    }
+
+    fn visual_status(&self) -> String {
+        let cursor = self.current_text_cursor();
+        match self.mode {
+            Mode::Visual => format!(
+                "visual: p{} line {} char {} | y copy | Esc exit",
+                cursor.page + 1,
+                cursor.line + 1,
+                cursor.glyph + 1
+            ),
+            Mode::VisualLine => format!(
+                "visual line: p{} line {} | y copy | Esc exit",
+                cursor.page + 1,
+                cursor.line + 1
+            ),
+            _ => self.default_status(),
+        }
+    }
+
+    fn visual_selection_ranges(&self) -> Vec<TextSelectionRange> {
+        let Some(anchor) = self.visual_anchor else {
+            return Vec::new();
+        };
+        if !matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+            return Vec::new();
+        }
+
+        let start = self
+            .clamp_text_cursor(anchor)
+            .min(self.current_text_cursor());
+        let end = self
+            .clamp_text_cursor(anchor)
+            .max(self.current_text_cursor());
+        let mut ranges = Vec::new();
+
+        for page_index in start.page..=end.page {
+            let Some(page) = self.document.pages.get(page_index) else {
+                continue;
+            };
+            if page.lines.is_empty() {
+                continue;
+            }
+
+            let first_line = if page_index == start.page {
+                start.line
+            } else {
+                0
+            };
+            let last_line = if page_index == end.page {
+                end.line.min(page.lines.len() - 1)
+            } else {
+                page.lines.len() - 1
+            };
+
+            for line_index in first_line..=last_line {
+                let glyph_count = page.lines[line_index].glyphs.len();
+                if glyph_count == 0 {
+                    ranges.push(TextSelectionRange {
+                        page: page_index,
+                        line: line_index,
+                        start_glyph: 0,
+                        end_glyph: 0,
+                    });
+                    continue;
+                }
+
+                let (start_glyph, end_glyph) = if self.mode == Mode::VisualLine {
+                    (0, glyph_count - 1)
+                } else if start.page == end.page && start.line == end.line {
+                    (
+                        start.glyph.min(glyph_count - 1),
+                        end.glyph.min(glyph_count - 1),
+                    )
+                } else if page_index == start.page && line_index == start.line {
+                    (start.glyph.min(glyph_count - 1), glyph_count - 1)
+                } else if page_index == end.page && line_index == end.line {
+                    (0, end.glyph.min(glyph_count - 1))
+                } else {
+                    (0, glyph_count - 1)
+                };
+
+                ranges.push(TextSelectionRange {
+                    page: page_index,
+                    line: line_index,
+                    start_glyph,
+                    end_glyph,
+                });
+            }
+        }
+
+        ranges
+    }
+
+    fn visual_selected_text(&self) -> Option<String> {
+        let ranges = self.visual_selection_ranges();
+        if ranges.is_empty() {
+            return None;
+        }
+
+        Some(
+            ranges
+                .into_iter()
+                .map(|range| self.text_for_selection_range(range))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+    }
+
+    fn text_for_selection_range(&self, range: TextSelectionRange) -> String {
+        let Some(line) = self
+            .document
+            .pages
+            .get(range.page)
+            .and_then(|page| page.lines.get(range.line))
+        else {
+            return String::new();
+        };
+        if line.glyphs.is_empty() {
+            return String::new();
+        }
+
+        let start = range.start_glyph.min(line.glyphs.len() - 1);
+        let end = range.end_glyph.min(line.glyphs.len() - 1);
+        line.glyphs[start.min(end)..=start.max(end)]
+            .iter()
+            .map(|glyph| glyph.ch)
+            .collect()
+    }
+
+    fn selection_range_bounds(&self, range: TextSelectionRange) -> Option<PdfRect> {
+        let line = self.document.pages.get(range.page)?.lines.get(range.line)?;
+        if line.glyphs.is_empty() {
+            return Some(line.bbox);
+        }
+
+        let start = range.start_glyph.min(line.glyphs.len() - 1);
+        let end = range.end_glyph.min(line.glyphs.len() - 1);
+        let mut glyphs = line.glyphs[start.min(end)..=start.max(end)].iter();
+        let first = glyphs.next()?;
+        let mut min_x = first.bbox.x;
+        let mut min_y = first.bbox.y;
+        let mut max_x = first.bbox.x + first.bbox.width;
+        let mut max_y = first.bbox.y + first.bbox.height;
+
+        for glyph in glyphs {
+            min_x = min_x.min(glyph.bbox.x);
+            min_y = min_y.min(glyph.bbox.y);
+            max_x = max_x.max(glyph.bbox.x + glyph.bbox.width);
+            max_y = max_y.max(glyph.bbox.y + glyph.bbox.height);
+        }
+
+        Some(PdfRect::new(min_x, min_y, max_x - min_x, max_y - min_y))
     }
 
     fn handle_mark_mode(&mut self, key: KeyEvent, set_mark: bool) {
@@ -1088,6 +1860,8 @@ impl App {
         self.follow_input.clear();
         self.follow_hints.clear();
         self.follow_cluster_rotations.clear();
+        self.visual_anchor = None;
+        self.text_cursor = None;
         self.pending_g = false;
         self.count_buffer.clear();
         self.bump_render_nonce();
@@ -1197,6 +1971,11 @@ impl App {
             .saturating_sub(viewport.height / 2)
             .min(self.max_scroll_y_for(&layout, viewport));
         self.clamp_viewport_offset_with(&layout, viewport);
+        self.text_cursor = Some(self.clamp_text_cursor(TextCursor {
+            page: page_index,
+            line: line_index,
+            glyph: 0,
+        }));
         self.count_buffer.clear();
         self.pending_g = false;
         self.bump_render_nonce();
@@ -1242,6 +2021,7 @@ impl App {
 
         self.clamp_viewport_offset_with(&new_layout, viewport);
         self.bump_render_nonce();
+        self.text_cursor = None;
         self.status = self.default_status();
     }
 
@@ -1298,12 +2078,14 @@ impl App {
 
         self.clamp_viewport_offset_with(&new_layout, viewport);
         self.bump_render_nonce();
+        self.text_cursor = None;
         self.status = self.default_status();
     }
 
     fn reset_zoom(&mut self) {
         self.zoom_percent = 100;
         self.viewport_offset = ViewportOffset::default();
+        self.text_cursor = None;
         self.bump_render_nonce();
         self.status = self.default_status();
     }
@@ -1326,6 +2108,7 @@ impl App {
             delta,
             self.max_scroll_x_for(&layout, viewport),
         );
+        self.text_cursor = None;
         self.count_buffer.clear();
         self.bump_render_nonce();
         self.status = self.default_status();
@@ -1343,6 +2126,7 @@ impl App {
             delta,
             self.max_scroll_y_for(&layout, viewport),
         );
+        self.text_cursor = None;
         self.count_buffer.clear();
         self.bump_render_nonce();
         self.status = self.default_status();
@@ -1704,6 +2488,10 @@ fn offset_with_delta(current: u32, delta: i32, max: u32) -> u32 {
     }
 }
 
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
 fn coalesce_axis_i32(current: i32, delta: i32) -> i32 {
     if current == 0 || current.signum() == delta.signum() {
         delta
@@ -1955,4 +2743,62 @@ fn open_external_uri(uri: &str) -> io::Result<()> {
 
     command.spawn()?.wait()?;
     Ok(())
+}
+
+fn copy_to_system_clipboard(text: &str) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        write_text_to_command("pbcopy", &[], text)
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return write_text_to_command("clip", &[], text);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        for (program, args) in [
+            ("wl-copy", Vec::<&str>::new()),
+            ("xclip", vec!["-selection", "clipboard"]),
+            ("xsel", vec!["--clipboard", "--input"]),
+        ] {
+            if write_text_to_command(program, &args, text).is_ok() {
+                return Ok(());
+            }
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no supported clipboard command found (tried wl-copy, xclip, xsel)",
+        ));
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = text;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "clipboard copy is not supported on this platform",
+        ))
+    }
+}
+
+fn write_text_to_command(program: &str, args: &[&str], text: &str) -> io::Result<()> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .spawn()?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(text.as_bytes())?;
+    }
+
+    let status = child.wait()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "clipboard command {program} exited with {status}"
+        )))
+    }
 }

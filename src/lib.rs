@@ -1,6 +1,8 @@
 pub mod app;
+pub mod cli;
 pub mod document;
 pub mod kitty;
+pub mod layout;
 pub mod pdf;
 pub mod pdfium_bundle;
 pub mod platform;

@@ -1,11 +1,11 @@
 use ratatui::layout::Rect;
 use termpdf::document::{Document, Page, PdfRect};
 use termpdf::render::{
+    ACTIVE_SEARCH_HIGHLIGHT_RGBA, CellPixels, FrameOffsets, OverlayPlacement, PageRenderCache,
+    PageRenderInfo, RenderedPage, SEARCH_HIGHLIGHT_RGBA, ViewportOffset, ViewportPixels,
     build_document_layout, build_highlight_mask, build_page_render_plan, build_visible_page_plans,
     compose_visible_page_frame, compose_visible_page_frame_with_offsets, current_page_for_scroll,
-    invert_rgba_in_place, viewport_pixels, CellPixels, FrameOffsets, OverlayPlacement,
-    PageRenderCache, PageRenderInfo, RenderedPage, ViewportOffset, ViewportPixels,
-    ACTIVE_SEARCH_HIGHLIGHT_RGBA, SEARCH_HIGHLIGHT_RGBA,
+    invert_rgba_in_place, viewport_pixels,
 };
 
 #[test]
@@ -587,6 +587,8 @@ fn compose_visible_page_frame_ignores_highlights_outside_current_crop() {
         &[PdfRect::new(150.0, 75.0, 20.0, 10.0)],
         None,
         &[],
+        None,
+        &[],
     );
 
     assert!(frame.rgba.iter().all(|value| *value == 255));
@@ -629,6 +631,8 @@ fn compose_visible_page_frame_changes_with_crop_at_zoom_over_100() {
         &[],
         None,
         &[],
+        None,
+        &[],
     );
     let right = compose_visible_page_frame(
         &RenderedPage {
@@ -651,6 +655,8 @@ fn compose_visible_page_frame_changes_with_crop_at_zoom_over_100() {
             height: 1,
         },
         false,
+        &[],
+        None,
         &[],
         None,
         &[],
@@ -685,6 +691,8 @@ fn compose_visible_page_frame_maps_pdf_y_from_bottom_origin() {
         },
         false,
         &[PdfRect::new(0.0, 0.0, 10.0, 10.0)],
+        None,
+        &[],
         None,
         &[],
     );
@@ -723,6 +731,8 @@ fn compose_visible_page_frame_crops_to_visible_region_and_pads_to_cell_boundary(
             height: 2,
         },
         false,
+        &[],
+        None,
         &[],
         None,
         &[],
@@ -769,6 +779,8 @@ fn compose_visible_page_frame_respects_explicit_frame_offsets() {
         &[],
         None,
         &[],
+        None,
+        &[],
         Some(FrameOffsets { x: 1, y: 0 }),
     );
 
@@ -789,7 +801,7 @@ fn compose_visible_page_frame_centers_narrow_page_in_viewport() {
         crop_height: 4,
         placement_columns: 4,
         placement_rows: 4,
-        rgba: vec![255, 0, 0, 255].repeat(8),
+        rgba: [255, 0, 0, 255].repeat(8),
     };
 
     let frame = compose_visible_page_frame(
@@ -800,6 +812,8 @@ fn compose_visible_page_frame_centers_narrow_page_in_viewport() {
             height: 1,
         },
         false,
+        &[],
+        None,
         &[],
         None,
         &[],
@@ -825,7 +839,7 @@ fn compose_visible_page_frame_applies_dark_mode_and_search_highlights() {
         crop_height: 2,
         placement_columns: 2,
         placement_rows: 1,
-        rgba: vec![20, 40, 60, 255].repeat(8),
+        rgba: [20, 40, 60, 255].repeat(8),
     };
 
     let frame = compose_visible_page_frame(
@@ -839,9 +853,60 @@ fn compose_visible_page_frame_applies_dark_mode_and_search_highlights() {
         &[PdfRect::new(0.0, 0.0, 2.0, 1.0)],
         Some(PdfRect::new(2.0, 0.0, 2.0, 1.0)),
         &[],
+        None,
+        &[],
     );
 
     assert_eq!(&frame.rgba[0..4], &[235, 215, 195, 255]);
     assert_eq!(&frame.rgba[8..12], &[235, 215, 195, 255]);
     assert_ne!(&frame.rgba[16..20], &[235, 215, 195, 255]);
+}
+
+#[test]
+fn compose_visible_page_frame_applies_selection_and_cursor_highlights() {
+    let source = RenderedPage {
+        page_index: 0,
+        placement_col: 0,
+        placement_row: 0,
+        bitmap_width: 10,
+        bitmap_height: 10,
+        crop_x: 0,
+        crop_y: 0,
+        crop_width: 10,
+        crop_height: 10,
+        placement_columns: 10,
+        placement_rows: 10,
+        rgba: [10, 20, 30, 255].repeat(10 * 10),
+    };
+
+    let frame = compose_visible_page_frame(
+        &source,
+        PdfRect::new(0.0, 0.0, 10.0, 10.0),
+        CellPixels {
+            width: 1,
+            height: 1,
+        },
+        false,
+        &[],
+        None,
+        &[PdfRect::new(0.0, 0.0, 2.0, 2.0)],
+        Some(PdfRect::new(5.0, 5.0, 3.0, 3.0)),
+        &[],
+    );
+
+    let selection_pixel = ((8 * 10) * 4) as usize;
+    let cursor_pixel = ((3 * 10 + 6) * 4) as usize;
+    let outside_cursor_pixel = ((3 * 10 + 4) * 4) as usize;
+    assert_ne!(
+        &frame.rgba[selection_pixel..selection_pixel + 4],
+        &[10, 20, 30, 255]
+    );
+    assert_eq!(
+        &frame.rgba[cursor_pixel..cursor_pixel + 4],
+        &frame.rgba[selection_pixel..selection_pixel + 4]
+    );
+    assert_eq!(
+        &frame.rgba[outside_cursor_pixel..outside_cursor_pixel + 4],
+        &[10, 20, 30, 255]
+    );
 }
