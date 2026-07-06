@@ -8,10 +8,12 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 
 ## CHANGELOG
 
-### Unreleased
+### 0.3.1
 
 - Added a visible block cursor in normal mode with Vim-style text cursor motions (`h`, `j`, `k`, `l`, `w`, `b`, `^`, `$`) and count support.
-- Added visual character selection (`v`), visual line selection (`V`), and clipboard copy (`y`) as plain text using platform clipboard commands (`pbcopy`, `wl-copy`, `xclip`, `xsel`, `clip`).
+- Added visual character selection (`v`), visual line selection (`V`), visual block selection (`Ctrl-v`), and clipboard copy (`y`) as plain text using platform clipboard commands (`pbcopy`, `wl-copy`, `xclip`, `xsel`, `clip`).
+- Reworked the status bar: left-aligned color mode indicator (NORMAL / VISUAL / V-LINE / V-BLOCK) with a section divider before context-specific keybinding chips.
+- Normal mode shows `/ search`, `f links`, `m mark`, `F5 present`, `q quit`; visual modes show `y copy`.
 - Improved PDF line clustering to use glyph center lines and vertical overlap, with a second pass that merges small inline annotations (superscripts, subscripts, footnote markers) into their source-adjacent body line instead of creating spurious single-glyph lines.
 - Changed `termpdf grep` to default to regular expression search; use `--literal` for plain text matching.
 
@@ -75,8 +77,8 @@ brew install NiJingzhe/termpdf/termpdf
 Download the archive for your platform from the GitHub Releases page, then extract it:
 
 ```bash
-tar -xzf termpdf-0.3.0-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.3.0-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.3.1-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.3.1-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 
@@ -279,6 +281,7 @@ Each release archive contains:
 - `f` / `F`: follow visible links
 - `v`: visual character selection
 - `V`: visual line selection
+- `Ctrl-v`: visual block selection
 - `y`: copy the active visual selection to the system clipboard as plain text
 - `m<char>` / `` `<char> ``: set and jump to marks
 - `F5`: presentation mode

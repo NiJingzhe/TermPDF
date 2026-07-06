@@ -86,6 +86,7 @@ pub enum Mode {
     JumpMark,
     Visual,
     VisualLine,
+    VisualBlock,
     Presentation,
 }
 
@@ -556,7 +557,10 @@ impl App {
             self.presentation_page = Some(page_index.min(last_page));
         }
 
-        if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+        if matches!(
+            self.mode,
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
+        ) {
             self.mode = Mode::Normal;
             self.visual_anchor = None;
             self.text_cursor = None;
@@ -690,7 +694,10 @@ impl App {
     }
 
     pub fn cursor_bounds_for_page(&self, page: usize) -> Option<PdfRect> {
-        if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+        if matches!(
+            self.mode,
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
+        ) {
             return None;
         }
 
@@ -767,7 +774,7 @@ impl App {
             Mode::Follow => self.handle_follow_mode(key),
             Mode::SetMark => self.handle_mark_mode(key, true),
             Mode::JumpMark => self.handle_mark_mode(key, false),
-            Mode::Visual | Mode::VisualLine => self.handle_visual_mode(key),
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock => self.handle_visual_mode(key),
             Mode::Presentation => self.handle_presentation_mode(key),
         }
     }
@@ -1056,6 +1063,9 @@ impl App {
             KeyCode::Char('n') => self.advance_match(true),
             KeyCode::Char('N') => self.advance_match(false),
             KeyCode::Char('f') | KeyCode::Char('F') => self.enter_follow_mode(),
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.enter_visual_mode(Mode::VisualBlock)
+            }
             KeyCode::Char('v') => self.enter_visual_mode(Mode::Visual),
             KeyCode::Char('V') => self.enter_visual_mode(Mode::VisualLine),
             KeyCode::Char('m') => {
@@ -1138,6 +1148,15 @@ impl App {
 
         match key.code {
             KeyCode::Esc => self.exit_visual_mode(self.default_status()),
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.mode == Mode::VisualBlock {
+                    self.exit_visual_mode(self.default_status());
+                } else {
+                    self.mode = Mode::VisualBlock;
+                    self.status = self.visual_status();
+                    self.bump_render_nonce();
+                }
+            }
             KeyCode::Char('v') => {
                 if self.mode == Mode::Visual {
                     self.exit_visual_mode(self.default_status());
@@ -1271,7 +1290,10 @@ impl App {
         let cursor = self.clamp_text_cursor(cursor);
         self.text_cursor = Some(cursor);
         self.focus_text_cursor(cursor);
-        self.status = if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+        self.status = if matches!(
+            self.mode,
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
+        ) {
             self.visual_status()
         } else {
             self.default_status()
@@ -1612,6 +1634,12 @@ impl App {
                 cursor.page + 1,
                 cursor.line + 1
             ),
+            Mode::VisualBlock => format!(
+                "visual block: p{} line {} char {} | y copy | Esc exit",
+                cursor.page + 1,
+                cursor.line + 1,
+                cursor.glyph + 1
+            ),
             _ => self.default_status(),
         }
     }
@@ -1620,7 +1648,10 @@ impl App {
         let Some(anchor) = self.visual_anchor else {
             return Vec::new();
         };
-        if !matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+        if !matches!(
+            self.mode,
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
+        ) {
             return Vec::new();
         }
 
@@ -1665,6 +1696,13 @@ impl App {
 
                 let (start_glyph, end_glyph) = if self.mode == Mode::VisualLine {
                     (0, glyph_count - 1)
+                } else if self.mode == Mode::VisualBlock
+                    && start.page == end.page
+                    && page_index == start.page
+                {
+                    let col_start = start.glyph.min(end.glyph).min(glyph_count - 1);
+                    let col_end = start.glyph.max(end.glyph).min(glyph_count - 1);
+                    (col_start, col_end)
                 } else if start.page == end.page && start.line == end.line {
                     (
                         start.glyph.min(glyph_count - 1),

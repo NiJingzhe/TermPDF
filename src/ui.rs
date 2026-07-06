@@ -127,26 +127,28 @@ fn document_paragraph(app: &App, area: Rect) -> Paragraph<'static> {
 }
 
 fn status_paragraph(app: &App) -> Paragraph<'static> {
-    let chips = vec![
-        mode_prefix(app.mode()),
-        status_chip("/", "search", Color::Yellow, Color::Black),
-        separator(),
-        status_chip("v", "visual", Color::Cyan, Color::Black),
-        separator(),
-        status_chip("y", "copy", Color::Green, Color::Black),
-        separator(),
-        status_chip("f", "links", Color::Cyan, Color::Black),
-        separator(),
-        status_chip("m", "mark", Color::Magenta, Color::Black),
-        separator(),
-        status_chip("F5", "present", Color::Blue, Color::White),
-        separator(),
-        status_chip("q", "quit", Color::Red, Color::White),
-        Span::raw("  "),
-        Span::styled(app.status().to_string(), Style::default().fg(Color::Gray)),
-    ];
+    let mode = app.mode();
+    let chips = mode_keybinding_chips(mode);
+    let mut line_spans = vec![mode_prefix(mode)];
+    if !chips.is_empty() {
+        line_spans.push(section_divider());
+        for chip in chips {
+            line_spans.push(chip);
+            line_spans.push(separator());
+        }
+        if let Some(last) = line_spans.last()
+            && last == &separator()
+        {
+            line_spans.pop();
+        }
+    }
+    line_spans.push(Span::raw("  "));
+    line_spans.push(Span::styled(
+        app.status().to_string(),
+        Style::default().fg(Color::Gray),
+    ));
 
-    Paragraph::new(TextLine::from(chips)).block(
+    Paragraph::new(TextLine::from(line_spans)).block(
         Block::default()
             .borders(Borders::ALL)
             .style(Style::default().bg(Color::Rgb(20, 24, 32))),
@@ -161,15 +163,34 @@ fn page_label(app: &App) -> String {
     )
 }
 
+fn mode_keybinding_chips(mode: Mode) -> Vec<Span<'static>> {
+    match mode {
+        Mode::Normal => vec![
+            status_chip("/", "search", Color::Yellow, Color::Black),
+            status_chip("f", "links", Color::Cyan, Color::Black),
+            status_chip("m", "mark", Color::Magenta, Color::Black),
+            status_chip("F5", "present", Color::Blue, Color::White),
+            status_chip("q", "quit", Color::Red, Color::White),
+        ],
+        Mode::Visual | Mode::VisualLine | Mode::VisualBlock => {
+            vec![status_chip("y", "copy", Color::Green, Color::Black)]
+        }
+        Mode::Search | Mode::Follow | Mode::SetMark | Mode::JumpMark | Mode::Presentation => {
+            Vec::new()
+        }
+    }
+}
+
 fn mode_prefix(mode: Mode) -> Span<'static> {
     match mode {
-        Mode::Normal => Span::raw(String::new()),
+        Mode::Normal => status_chip("NORMAL", "", Color::Blue, Color::White),
         Mode::Search => status_chip("SEARCH", "", Color::Yellow, Color::Black),
         Mode::Follow => status_chip("FOLLOW", "", Color::Cyan, Color::Black),
         Mode::SetMark => status_chip("MARK", "", Color::Magenta, Color::Black),
         Mode::JumpMark => status_chip("JUMP", "", Color::Magenta, Color::Black),
         Mode::Visual => status_chip("VISUAL", "", Color::Cyan, Color::Black),
-        Mode::VisualLine => status_chip("V-LINE", "", Color::Cyan, Color::Black),
+        Mode::VisualLine => status_chip("V-LINE", "", Color::Green, Color::Black),
+        Mode::VisualBlock => status_chip("V-BLOCK", "", Color::Magenta, Color::White),
         Mode::Presentation => status_chip("PRESENT", "", Color::Blue, Color::White),
     }
 }
@@ -220,6 +241,10 @@ fn line_spans(
 
 fn separator() -> Span<'static> {
     Span::styled(" ", Style::default().bg(Color::Rgb(20, 24, 32)))
+}
+
+fn section_divider() -> Span<'static> {
+    Span::styled(" │ ", Style::default().fg(Color::Rgb(60, 68, 82)))
 }
 
 fn status_chip(key: &str, label: &str, bg: Color, fg: Color) -> Span<'static> {
