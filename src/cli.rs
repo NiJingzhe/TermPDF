@@ -56,7 +56,18 @@ pub struct GrepOptions {
         F5                   Presentation mode\n  \
         = / - / 0            Zoom in / out / reset\n  \
         i                    Toggle dark mode\n  \
-        q                    Quit"
+        q                    Quit",
+    after_long_help = "Examples:\n  \
+        termpdf paper.pdf                                  Open paper.pdf in the viewer\n  \
+        termpdf paper.pdf --watch                          Reopen the PDF when the file changes\n  \
+        termpdf paper.pdf --dark                           Start in dark mode\n  \
+        termpdf paper.pdf --pdfium-lib /opt/pdfium         Use a specific PDFium library\n  \
+        termpdf extract paper.pdf                          Write paper.layout/ next to the PDF\n  \
+        termpdf extract paper.pdf --out out.layout         Write to a custom layout directory\n  \
+        termpdf extract paper.pdf --overwrite              Replace an existing layout pack\n  \
+        termpdf grep \"method\" paper.layout                 Print matching refs and text\n  \
+        termpdf grep \"method|approach\" paper.layout --json  Output JSON results\n  \
+        termpdf grep \"foo.bar\" paper.layout --literal       Treat the pattern as literal text"
 )]
 struct CliOptions {
     #[command(subcommand)]
@@ -86,8 +97,28 @@ struct CliOptions {
 #[derive(Subcommand, Debug)]
 enum CliSubcommand {
     /// Extract a stable layout pack for agents and LLMs.
+    #[command(long_about = "Extract a stable layout pack for agents and LLMs.\n\n\
+            Each layout pack contains manifest.json, pages.jsonl, blocks.jsonl, glyphs.jsonl, \
+            and refs.jsonl with stable one-based refs like p1, p1.t1, p1.t1.c1, and p1.link1.\n\n\
+            Examples:\n  \
+            termpdf extract paper.pdf                         Write paper.layout/ next to the PDF\n  \
+            termpdf extract paper.pdf --out out.layout        Write to a custom directory\n  \
+            termpdf extract paper.pdf --overwrite             Replace an existing layout pack\n  \
+            termpdf extract paper.pdf --pdfium-lib /opt/lib   Use a specific PDFium library")]
     Extract(ExtractCliOptions),
     /// Search text lines in a layout pack and return stable refs.
+    #[command(
+        long_about = "Search text lines in a layout pack and return stable refs.\n\n\
+            By default the PATTERN is treated as a regular expression and the output is \
+            `ref<TAB>text` per match. Use --literal for plain text matching, --ignore-case for \
+            case-insensitive search, --json for structured JSON, or --refs-only for just the ref.\n\n\
+            Examples:\n  \
+            termpdf grep \"method\" paper.layout                       Print matching refs and text\n  \
+            termpdf grep \"method|approach\" paper.layout --json        Output JSON results\n  \
+            termpdf grep \"foo.bar\" paper.layout --literal             Treat the pattern as literal text\n  \
+            termpdf grep \"summary\" paper.layout --refs-only           Print only the matching refs\n  \
+            termpdf grep \"term\" paper.layout --ignore-case            Search case-insensitively"
+    )]
     Grep(GrepCliOptions),
 }
 
