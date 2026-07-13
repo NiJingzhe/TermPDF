@@ -8,6 +8,21 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 
 ## CHANGELOG
 
+### 0.4.0
+
+- Added recursive PDF image extraction, including images nested inside Form XObjects, with processed PNG assets in layout packs.
+- Added Normal-mode image focus with `Tab` / `Shift-Tab`; press `y` to copy the focused image as PNG without decoding all document images at startup.
+- Updated the layout schema to `termpdf.layout.v2` with `images.jsonl`, stable image refs, transform and pixel metadata, SHA-256 hashes, and `assets/*.png`. `termpdf grep` remains compatible with v1 packs.
+
+### 0.3.1
+
+- Added a visible block cursor in normal mode with Vim-style text cursor motions (`h`, `j`, `k`, `l`, `w`, `b`, `^`, `$`) and count support.
+- Added visual character selection (`v`), visual line selection (`V`), visual block selection (`Ctrl-v`), and clipboard copy (`y`) as plain text using platform clipboard commands (`pbcopy`, `wl-copy`, `xclip`, `xsel`, `clip`).
+- Reworked the status bar: left-aligned color mode indicator (NORMAL / VISUAL / V-LINE / V-BLOCK) with a section divider before context-specific keybinding chips.
+- Normal mode shows `/ search`, `f links`, `m mark`, `F5 present`, `q quit`; visual modes show `y copy`.
+- Improved PDF line clustering to use glyph center lines and vertical overlap, with a second pass that merges small inline annotations (superscripts, subscripts, footnote markers) into their source-adjacent body line instead of creating spurious single-glyph lines.
+- Changed `termpdf grep` to default to regular expression search; use `--literal` for plain text matching.
+
 ### 0.2.0
 
 - Added tmux support through Kitty graphics passthrough. Enable it in `~/.tmux.conf` with `set -g allow-passthrough on`.
@@ -25,6 +40,10 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 - Presentation mode
 - Dark mode toggle
 - Watch mode with live PDF reload
+- Agent and LLM-oriented layout pack extraction with stable refs
+- Vim-style visual selection with clipboard copy as plain text
+- Recursive PDF image extraction and processed PNG assets
+- Image focus and PNG clipboard copy
 
 ## Install
 
@@ -66,8 +85,8 @@ brew install NiJingzhe/termpdf/termpdf
 Download the archive for your platform from the GitHub Releases page, then extract it:
 
 ```bash
-tar -xzf termpdf-0.2.0-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.2.0-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.4.0-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.4.0-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 
@@ -153,6 +172,62 @@ If PDFium is not available in the system library path, TermPDF will try the down
 cargo run -- path/to/file.pdf --pdfium-lib /path/to/pdfium
 ```
 
+## Layout Pack Extraction
+
+TermPDF can extract a stable layout pack for agents, LLMs, search pipelines, and other CLI tools:
+
+```bash
+termpdf extract path/to/file.pdf --out path/to/file.layout
+```
+
+If `--out` is omitted, TermPDF writes next to the source PDF with a `.layout` suffix:
+
+```bash
+termpdf extract paper.pdf
+# writes paper.layout/
+```
+
+Use `--overwrite` to replace an existing TermPDF layout pack:
+
+```bash
+termpdf extract paper.pdf --overwrite
+```
+
+Each layout pack contains:
+
+- `manifest.json`: schema, TermPDF version, source PDF hash, coordinate system, and file map
+- `pages.jsonl`: one page record per line
+- `blocks.jsonl`: text line and link records
+- `glyphs.jsonl`: one precise glyph record per visible character
+- `images.jsonl`: image bbox, transform matrix, source pixel dimensions, PNG path, and SHA-256
+- `refs.jsonl`: a global reference registry for quick lookup
+- `assets/`: processed PNG files that can be opened directly by filesystem and image tools
+
+Image extraction recursively traverses Form XObjects, so images embedded inside reusable PDF forms are included. PNG assets are decoded and processed during `extract`; the viewer keeps only lightweight metadata and decodes one image on demand when it is copied.
+
+Stable refs use one-based, type-namespaced addresses:
+
+```text
+p1           page 1
+p1.t1        page 1, text line 1
+p1.t1.c1     page 1, text line 1, character 1
+p1.link1     page 1, link 1
+p1.image1    page 1, image 1 (`assets/p1.image1.png`)
+```
+
+The layout schema is `termpdf.layout.v2`. Bboxes use PDF points with a bottom-left origin, matching PDFium extraction and TermPDF rendering projection. `termpdf grep` also accepts legacy `termpdf.layout.v1` packs.
+
+Search a layout pack and return stable refs with `grep`:
+
+```bash
+termpdf grep "method" paper.layout
+termpdf grep "method" paper.layout --refs-only
+termpdf grep "method|approach" paper.layout --json
+termpdf grep "literal.dot" paper.layout --literal
+```
+
+By default, `grep` treats the pattern as a regular expression and prints `ref<TAB>text`. Use `--ignore-case` for case-insensitive search and `--literal` when the pattern should be treated as plain text.
+
 ## Build Environment
 
 `TERMPDF_PDFIUM_VARIANT` selects which PDFium dynamic library Cargo should download and copy next to the built binary.
@@ -209,12 +284,19 @@ Each release archive contains:
 
 ## Keybindings
 
-- `h j k l`: pan viewport
+- `h` / `j` / `k` / `l`: move the text cursor
+- `w` / `b` / `^` / `$`: move by word or line boundary
+- `H` / `J` / `K` / `L`: pan viewport
 - `Ctrl-u` / `Ctrl-d`: half-page up/down
 - `Ctrl-b` / `Ctrl-f`: full-page back/forward
 - `gg`, `{count}gg`, `G`: jump to page
 - `/`, `n`, `N`, `Esc`: search, navigate results, hide highlights
 - `f` / `F`: follow visible links
+- `v`: visual character selection
+- `V`: visual line selection
+- `Ctrl-v`: visual block selection
+- `Tab` / `Shift-Tab`: focus the next/previous extracted PDF image
+- `y`: copy the focused image as PNG, or copy the active visual selection as plain text
 - `m<char>` / `` `<char> ``: set and jump to marks
 - `F5`: presentation mode
 - `=` / `-` / `0`: zoom in / out / reset

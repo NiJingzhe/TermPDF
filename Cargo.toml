@@ -1,6 +1,6 @@
 [package]
 name = "termpdf"
-version = "0.2.0"
+version = "0.4.0"
 edition = "2024"
 build = "build.rs"
 
@@ -16,9 +16,17 @@ clap = { version = "4.5.39", features = ["derive"] }
 color-eyre = "0.6.5"
 crossterm = "0.29.0"
 flate2 = "1.1.5"
+image = { version = "0.25", default-features = false, features = ["png"] }
 pdfium-render = "0.9.0"
 ratatui = "0.30.0"
+regex = "1.12.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
 
+
+[dev-dependencies]
+tempfile = "3.23.0"
 
 # Read the optimization guideline for more details: https://ratatui.rs/recipes/apps/release-your-app/#optimizations
 [profile.release]
