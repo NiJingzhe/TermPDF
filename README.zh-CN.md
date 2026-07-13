@@ -8,6 +8,12 @@ TermPDF 是一个终端 PDF 阅读器，使用 Rust、ratatui、PDFium 和 Kitty
 
 ## 更新日志
 
+### 0.4.0
+
+- 新增递归 PDF 图片抽取，包括嵌套在 Form XObject 中的图片，并在 layout pack 中输出处理后的 PNG assets。
+- 新增普通模式图片聚焦：使用 `Tab` / `Shift-Tab` 切换图片，按 `y` 以 PNG 复制当前图片；打开文档时不会预先解码全部图片。
+- layout schema 升级为 `termpdf.layout.v2`，新增 `images.jsonl`、稳定图片 refs、变换矩阵与像素尺寸 metadata、SHA-256 和 `assets/*.png`；`termpdf grep` 仍兼容 v1 pack。
+
 ### 0.3.1
 
 - 新增普通模式下的可见 block 光标，支持 Vim 风格文本光标移动（`h`、`j`、`k`、`l`、`w`、`b`、`^`、`$`）及 count 支持。
@@ -36,6 +42,8 @@ TermPDF 是一个终端 PDF 阅读器，使用 Rust、ratatui、PDFium 和 Kitty
 - 监听模式，支持 PDF 实时重载
 - 面向 Agent 和 LLM 的 layout pack 抽取，并提供稳定 refs
 - Vim 风格 visual 选择，并以纯文本复制到剪贴板
+- 递归抽取 PDF 图片，并输出处理后的 PNG assets
+- 聚焦图片并以 PNG 复制到剪贴板
 
 ## 安装
 
@@ -77,8 +85,8 @@ brew install NiJingzhe/termpdf/termpdf
 从 GitHub Releases 页面下载适合你平台的压缩包，然后解压：
 
 ```bash
-tar -xzf termpdf-0.3.1-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.3.1-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.4.0-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.4.0-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 
@@ -191,7 +199,11 @@ termpdf extract paper.pdf --overwrite
 - `pages.jsonl`：每页一条记录
 - `blocks.jsonl`：文本行和链接记录
 - `glyphs.jsonl`：每个可见字符一条精确 glyph 记录
+- `images.jsonl`：图片 bbox、变换矩阵、源像素尺寸、PNG 路径和 SHA-256
 - `refs.jsonl`：用于快速查询的全局引用注册表
+- `assets/`：可由文件系统和图片工具直接打开的处理后 PNG 文件
+
+图片抽取会递归遍历 Form XObject，因此可复用 PDF form 内嵌套的图片也会被包含。`extract` 会解码并处理 PNG assets；viewer 只保留轻量 metadata，在复制当前图片时才按需解码。
 
 稳定 refs 使用一基编号和类型命名空间：
 
@@ -200,9 +212,10 @@ p1           第 1 页
 p1.t1        第 1 页第 1 条文本行
 p1.t1.c1     第 1 页第 1 条文本行的第 1 个字符
 p1.link1     第 1 页第 1 个链接
+p1.image1    第 1 页第 1 张图片（`assets/p1.image1.png`）
 ```
 
-layout schema 为 `termpdf.layout.v1`。bbox 使用 PDF points，原点在左下角，与 PDFium 抽取和 TermPDF 渲染投影保持一致。
+layout schema 为 `termpdf.layout.v2`。bbox 使用 PDF points，原点在左下角，与 PDFium 抽取和 TermPDF 渲染投影保持一致。`termpdf grep` 也支持旧版 `termpdf.layout.v1` pack。
 
 使用 `grep` 搜索 layout pack 并返回稳定 refs：
 
@@ -282,7 +295,8 @@ TERMPDF_PDFIUM_VARIANT=linux-x64-glibc cargo build --release
 - `v`：普通 visual 字符选择
 - `V`：visual 行选择
 - `Ctrl-v`：visual block 选择
-- `y`：把当前 visual 选择以纯文本复制到系统剪贴板
+- `Tab` / `Shift-Tab`：聚焦下一张/上一张抽取出的 PDF 图片
+- `y`：把当前聚焦图片以 PNG 复制，或把当前 visual 选择以纯文本复制
 - `m<char>` / `` `<char> ``：设置标记并跳转到标记
 - `F5`：演示模式
 - `=` / `-` / `0`：放大、缩小、重置缩放

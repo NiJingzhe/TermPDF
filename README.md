@@ -8,6 +8,12 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 
 ## CHANGELOG
 
+### 0.4.0
+
+- Added recursive PDF image extraction, including images nested inside Form XObjects, with processed PNG assets in layout packs.
+- Added Normal-mode image focus with `Tab` / `Shift-Tab`; press `y` to copy the focused image as PNG without decoding all document images at startup.
+- Updated the layout schema to `termpdf.layout.v2` with `images.jsonl`, stable image refs, transform and pixel metadata, SHA-256 hashes, and `assets/*.png`. `termpdf grep` remains compatible with v1 packs.
+
 ### 0.3.1
 
 - Added a visible block cursor in normal mode with Vim-style text cursor motions (`h`, `j`, `k`, `l`, `w`, `b`, `^`, `$`) and count support.
@@ -36,6 +42,8 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 - Watch mode with live PDF reload
 - Agent and LLM-oriented layout pack extraction with stable refs
 - Vim-style visual selection with clipboard copy as plain text
+- Recursive PDF image extraction and processed PNG assets
+- Image focus and PNG clipboard copy
 
 ## Install
 
@@ -77,8 +85,8 @@ brew install NiJingzhe/termpdf/termpdf
 Download the archive for your platform from the GitHub Releases page, then extract it:
 
 ```bash
-tar -xzf termpdf-0.3.1-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.3.1-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.4.0-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.4.0-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 
@@ -191,7 +199,11 @@ Each layout pack contains:
 - `pages.jsonl`: one page record per line
 - `blocks.jsonl`: text line and link records
 - `glyphs.jsonl`: one precise glyph record per visible character
+- `images.jsonl`: image bbox, transform matrix, source pixel dimensions, PNG path, and SHA-256
 - `refs.jsonl`: a global reference registry for quick lookup
+- `assets/`: processed PNG files that can be opened directly by filesystem and image tools
+
+Image extraction recursively traverses Form XObjects, so images embedded inside reusable PDF forms are included. PNG assets are decoded and processed during `extract`; the viewer keeps only lightweight metadata and decodes one image on demand when it is copied.
 
 Stable refs use one-based, type-namespaced addresses:
 
@@ -200,9 +212,10 @@ p1           page 1
 p1.t1        page 1, text line 1
 p1.t1.c1     page 1, text line 1, character 1
 p1.link1     page 1, link 1
+p1.image1    page 1, image 1 (`assets/p1.image1.png`)
 ```
 
-The layout schema is `termpdf.layout.v1`. Bboxes use PDF points with a bottom-left origin, matching PDFium extraction and TermPDF rendering projection.
+The layout schema is `termpdf.layout.v2`. Bboxes use PDF points with a bottom-left origin, matching PDFium extraction and TermPDF rendering projection. `termpdf grep` also accepts legacy `termpdf.layout.v1` packs.
 
 Search a layout pack and return stable refs with `grep`:
 
@@ -282,7 +295,8 @@ Each release archive contains:
 - `v`: visual character selection
 - `V`: visual line selection
 - `Ctrl-v`: visual block selection
-- `y`: copy the active visual selection to the system clipboard as plain text
+- `Tab` / `Shift-Tab`: focus the next/previous extracted PDF image
+- `y`: copy the focused image as PNG, or copy the active visual selection as plain text
 - `m<char>` / `` `<char> ``: set and jump to marks
 - `F5`: presentation mode
 - `=` / `-` / `0`: zoom in / out / reset

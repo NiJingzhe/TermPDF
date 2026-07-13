@@ -17,6 +17,33 @@ impl PdfRect {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PdfMatrix {
+    pub a: f32,
+    pub b: f32,
+    pub c: f32,
+    pub d: f32,
+    pub e: f32,
+    pub f: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PdfImage {
+    pub bbox: PdfRect,
+    pub matrix: PdfMatrix,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub page: usize,
+    pub object_path: Vec<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PdfImageAsset {
+    pub page: usize,
+    pub image: usize,
+    pub png: Vec<u8>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Glyph {
     pub ch: char,
@@ -58,6 +85,7 @@ pub struct Page {
     pub lines: Vec<PdfLine>,
     pub bbox: PdfRect,
     pub links: Vec<PageLink>,
+    pub images: Vec<PdfImage>,
 }
 
 impl Page {
@@ -92,6 +120,7 @@ impl Page {
             lines: built_lines,
             bbox: PdfRect::new(0.0, 0.0, 595.0, height.max(line_height)),
             links: Vec::new(),
+            images: Vec::new(),
         }
     }
 }

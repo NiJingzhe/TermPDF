@@ -34,7 +34,8 @@ fn run_extract(options: ExtractOptions) -> color_eyre::Result<()> {
     let backend = PdfBackend::new(options.pdfium_lib_path.as_deref())?;
     let session = backend.open_session(&options.pdf_path)?;
     let source = SourceMetadata::from_path(&options.pdf_path)?;
-    let pack = LayoutPack::from_document(session.document(), source);
+    let image_assets = session.extract_image_assets()?;
+    let pack = LayoutPack::from_document_with_images(session.document(), source, image_assets);
     let result = pack.write_to_dir(
         &options.output_dir,
         LayoutWriteOptions::new(options.overwrite),

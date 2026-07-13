@@ -1,12 +1,16 @@
 use std::cmp::Ordering;
 use std::env;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use color_eyre::eyre::{OptionExt, Result, WrapErr, bail};
 use pdfium_render::prelude::*;
 
-use crate::document::{Document, Glyph, LinkTarget, Page, PageLink, PdfLine, PdfRect};
+use crate::document::{
+    Document, Glyph, LinkTarget, Page, PageLink, PdfImage, PdfImageAsset, PdfLine,
+    PdfMatrix as DocumentPdfMatrix, PdfRect,
+};
 use crate::pdfium_bundle::{
     bundled_pdfium_variant, packaged_pdfium_library_name, pdfium_extracted_dir,
 };
@@ -19,6 +23,7 @@ const INLINE_ANNOTATION_MIN_TARGET_HEIGHT_FACTOR: f32 = 1.15;
 const INLINE_ANNOTATION_MAX_CENTER_DISTANCE_FACTOR: f32 = 1.0;
 const INLINE_ANNOTATION_MAX_VERTICAL_GAP_FACTOR: f32 = 0.35;
 const INLINE_ANNOTATION_MAX_HORIZONTAL_GAP_FACTOR: f32 = 2.0;
+const MAX_IMAGE_OBJECT_DEPTH: usize = 64;
 
 pub struct PdfBackend {
     pdfium: &'static Pdfium,
@@ -43,7 +48,7 @@ pub struct PdfBackendOptions {
 #[command(
     name = "termpdf",
     about = "Terminal PDF viewer with kitty image protocol",
-    after_help = "Keybindings:\n  hjkl                Pan viewport\n  Ctrl-u / Ctrl-d     Half-page up/down\n  Ctrl-b / Ctrl-f     Full-page back/forward\n  gg / {count}gg / G  Jump to page\n  /, n, N, Esc        Search, navigate, hide highlight\n  f / F               Follow visible links\n  m<char> / `<char>   Set and jump to marks\n  F5                  Presentation mode\n  = / - / 0           Zoom in / out / reset\n  i                   Toggle dark mode\n  q                   Quit"
+    after_help = "Keybindings:\n  hjkl                Move text cursor\n  HJKL                Pan viewport\n  Ctrl-u / Ctrl-d     Half-page up/down\n  Ctrl-b / Ctrl-f     Full-page back/forward\n  gg / {count}gg / G  Jump to page\n  /, n, N, Esc        Search, navigate, hide highlight\n  f / F               Follow visible links\n  Tab / Shift-Tab     Focus next/previous PDF image\n  y                   Copy focused image as PNG\n  v / V / Ctrl-v / y Select text and copy to clipboard\n  m<char> / `<char>   Set and jump to marks\n  F5                  Presentation mode\n  = / - / 0           Zoom in / out / reset\n  i                   Toggle dark mode\n  q                   Quit"
 )]
 struct CliOptions {
     #[arg(value_name = "FILE")]
@@ -245,6 +250,44 @@ impl PdfSession {
         &self.pdf_path
     }
 
+    pub fn extract_image_assets(&self) -> Result<Vec<PdfImageAsset>> {
+        let mut assets = Vec::new();
+
+        for (page_index, page) in self.document.pages.iter().enumerate() {
+            for image_index in 0..page.images.len() {
+                assets.push(PdfImageAsset {
+                    page: page_index,
+                    image: image_index,
+                    png: self.extract_image_png(page_index, image_index)?,
+                });
+            }
+        }
+
+        Ok(assets)
+    }
+
+    pub fn extract_image_png(&self, page_index: usize, image_index: usize) -> Result<Vec<u8>> {
+        let image = self
+            .document
+            .pages
+            .get(page_index)
+            .and_then(|page| page.images.get(image_index))
+            .ok_or_eyre("image index is out of bounds")?;
+        let page = self
+            .pdf_document
+            .pages()
+            .get(page_index as i32)
+            .wrap_err_with(|| format!("failed to load page {}", page_index + 1))?;
+
+        encode_image_object_png(
+            page.objects(),
+            &image.object_path,
+            &self.pdf_document,
+            page_index,
+            image_index,
+        )
+    }
+
     pub fn render_page(&mut self, plan: PageRenderPlan) -> Result<&RenderedPage> {
         let cache_key = plan.info();
 
@@ -299,10 +342,156 @@ fn extract_document(pdf_document: &PdfDocument<'_>) -> Result<Document> {
             lines: group_glyphs_into_lines(raw_glyphs),
             bbox: page_bbox,
             links: extract_links(&page),
+            images: extract_images(page_index, &page),
         });
     }
 
     Ok(Document { pages })
+}
+
+fn extract_images(page_index: usize, page: &PdfPage<'_>) -> Vec<PdfImage> {
+    let mut images = Vec::new();
+    collect_images(
+        page.objects(),
+        page_index,
+        pdfium_render::prelude::PdfMatrix::IDENTITY,
+        &mut Vec::new(),
+        &mut images,
+    );
+    images.sort_by(compare_images_for_reading_order);
+    images
+}
+
+fn collect_images<'a, T: PdfPageObjectsCommon<'a>>(
+    objects: &'a T,
+    page_index: usize,
+    parent_matrix: pdfium_render::prelude::PdfMatrix,
+    path: &mut Vec<usize>,
+    images: &mut Vec<PdfImage>,
+) {
+    for (object_index, object) in objects.iter().enumerate() {
+        path.push(object_index);
+        let object_matrix = object
+            .matrix()
+            .unwrap_or(pdfium_render::prelude::PdfMatrix::IDENTITY);
+        let matrix = object_matrix.multiply(parent_matrix);
+
+        if let Some(image) = object.as_image_object()
+            && let (Ok(pixel_width), Ok(pixel_height)) = (image.width(), image.height())
+        {
+            images.push(PdfImage {
+                bbox: matrix_bbox(matrix),
+                matrix: document_matrix(matrix),
+                pixel_width: pixel_width as u32,
+                pixel_height: pixel_height as u32,
+                page: page_index,
+                object_path: path.clone(),
+            });
+        }
+
+        if path.len() < MAX_IMAGE_OBJECT_DEPTH
+            && let Some(form) = object.as_x_object_form_object()
+        {
+            collect_images(form, page_index, matrix, path, images);
+        }
+        path.pop();
+    }
+}
+
+fn encode_image_object_png<'a, T: PdfPageObjectsCommon<'a>>(
+    objects: &'a T,
+    object_path: &[usize],
+    document: &PdfDocument<'_>,
+    page_index: usize,
+    image_index: usize,
+) -> Result<Vec<u8>> {
+    let (&object_index, child_path) = object_path
+        .split_first()
+        .ok_or_eyre("image object path is empty")?;
+    let object = objects.get(object_index).wrap_err_with(|| {
+        format!(
+            "failed to load image object {} on page {}",
+            image_index + 1,
+            page_index + 1
+        )
+    })?;
+
+    if child_path.is_empty() {
+        let image = object
+            .as_image_object()
+            .ok_or_eyre("object is not an image")?;
+        let dynamic_image = image.get_processed_image(document).wrap_err_with(|| {
+            format!(
+                "failed to decode image p{}.image{}",
+                page_index + 1,
+                image_index + 1
+            )
+        })?;
+        let mut png = Vec::new();
+        dynamic_image
+            .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+            .wrap_err_with(|| {
+                format!(
+                    "failed to encode image p{}.image{}",
+                    page_index + 1,
+                    image_index + 1
+                )
+            })?;
+        return Ok(png);
+    }
+
+    let form = object
+        .as_x_object_form_object()
+        .ok_or_eyre("image object path does not point through a form XObject")?;
+    encode_image_object_png(form, child_path, document, page_index, image_index)
+}
+
+fn matrix_bbox(matrix: pdfium_render::prelude::PdfMatrix) -> PdfRect {
+    let points = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]
+        .map(|(x, y)| matrix.apply_to_points(PdfPoints::new(x), PdfPoints::new(y)));
+    let min_x = points
+        .iter()
+        .map(|(x, _)| x.value)
+        .fold(f32::INFINITY, f32::min);
+    let min_y = points
+        .iter()
+        .map(|(_, y)| y.value)
+        .fold(f32::INFINITY, f32::min);
+    let max_x = points
+        .iter()
+        .map(|(x, _)| x.value)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let max_y = points
+        .iter()
+        .map(|(_, y)| y.value)
+        .fold(f32::NEG_INFINITY, f32::max);
+
+    PdfRect::new(min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+fn document_matrix(matrix: pdfium_render::prelude::PdfMatrix) -> DocumentPdfMatrix {
+    DocumentPdfMatrix {
+        a: matrix.a(),
+        b: matrix.b(),
+        c: matrix.c(),
+        d: matrix.d(),
+        e: matrix.e(),
+        f: matrix.f(),
+    }
+}
+
+fn compare_images_for_reading_order(left: &PdfImage, right: &PdfImage) -> Ordering {
+    let y_cmp = (right.bbox.y + right.bbox.height)
+        .partial_cmp(&(left.bbox.y + left.bbox.height))
+        .unwrap_or(Ordering::Equal);
+    if y_cmp == Ordering::Equal {
+        left.bbox
+            .x
+            .partial_cmp(&right.bbox.x)
+            .unwrap_or(Ordering::Equal)
+    } else {
+        y_cmp
+    }
 }
 
 fn extract_links(page: &PdfPage<'_>) -> Vec<PageLink> {

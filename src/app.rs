@@ -56,6 +56,7 @@ impl ClipboardBackend {
     fn memory() -> (Self, ClipboardCapture) {
         let capture = ClipboardCapture {
             text: Rc::new(RefCell::new(None)),
+            image: Rc::new(RefCell::new(None)),
         };
         (Self::Memory(capture.clone()), capture)
     }
@@ -65,6 +66,16 @@ impl ClipboardBackend {
             Self::System => copy_to_system_clipboard(text),
             Self::Memory(capture) => {
                 *capture.text.borrow_mut() = Some(text.to_string());
+                Ok(())
+            }
+        }
+    }
+
+    fn copy_image(&self, png: &[u8]) -> io::Result<()> {
+        match self {
+            Self::System => copy_image_to_system_clipboard(png),
+            Self::Memory(capture) => {
+                *capture.image.borrow_mut() = Some(png.to_vec());
                 Ok(())
             }
         }
@@ -108,11 +119,16 @@ pub struct TextSelectionRange {
 #[derive(Clone, Debug)]
 pub struct ClipboardCapture {
     text: Rc<RefCell<Option<String>>>,
+    image: Rc<RefCell<Option<Vec<u8>>>>,
 }
 
 impl ClipboardCapture {
     pub fn text(&self) -> Option<String> {
         self.text.borrow().clone()
+    }
+
+    pub fn image(&self) -> Option<Vec<u8>> {
+        self.image.borrow().clone()
     }
 }
 
@@ -204,6 +220,8 @@ pub struct App {
     presentation_page: Option<usize>,
     text_cursor: Option<TextCursor>,
     visual_anchor: Option<TextCursor>,
+    focused_image: Option<(usize, usize)>,
+    pending_image_copy: Option<(usize, usize)>,
     clipboard: ClipboardBackend,
 }
 
@@ -253,11 +271,13 @@ pub fn run(
             if event::poll(WATCH_POLL_INTERVAL)? {
                 let first = event::read()?;
                 app.handle_events(read_event_batch(first)?);
+                fulfill_pending_image_copy(app, session);
                 needs_redraw = true;
             }
         } else {
             let first = event::read()?;
             app.handle_events(read_event_batch(first)?);
+            fulfill_pending_image_copy(app, session);
             needs_redraw = true;
         }
     }
@@ -274,6 +294,17 @@ pub fn run(
     execute!(io::stdout(), DisableMouseCapture)?;
 
     Ok(())
+}
+
+fn fulfill_pending_image_copy(app: &mut App, session: &PdfSession) {
+    let Some((page, image)) = app.pending_image_copy.take() else {
+        return;
+    };
+
+    match session.extract_image_png(page, image) {
+        Ok(png) => app.complete_image_copy(&png),
+        Err(error) => app.status = format!("image copy failed: {error}"),
+    }
 }
 
 fn read_event_batch(first: Event) -> io::Result<Vec<Event>> {
@@ -477,6 +508,8 @@ impl App {
             presentation_page: None,
             text_cursor: None,
             visual_anchor: None,
+            focused_image: None,
+            pending_image_copy: None,
             clipboard: ClipboardBackend::System,
         };
         app.status = app.default_status();
@@ -519,6 +552,8 @@ impl App {
 
         self.document = document;
         self.index = DocumentIndex::build(&self.document);
+        self.focused_image = None;
+        self.pending_image_copy = None;
         self.matches = self.index.search(&self.search_input);
         self.active_match = self
             .active_match
@@ -576,6 +611,9 @@ impl App {
 
     pub fn cursor_page(&self) -> usize {
         if let Some(page_index) = self.presentation_page {
+            return page_index;
+        }
+        if let Some((page_index, _)) = self.focused_image {
             return page_index;
         }
         if let Some(cursor) = self.text_cursor {
@@ -654,6 +692,22 @@ impl App {
         self.visual_selected_text()
     }
 
+    pub fn focused_image(&self) -> Option<(usize, usize)> {
+        self.focused_image
+    }
+
+    pub fn pending_image_copy(&self) -> Option<(usize, usize)> {
+        self.pending_image_copy
+    }
+
+    pub fn complete_image_copy(&mut self, png: &[u8]) {
+        self.pending_image_copy = None;
+        self.status = match self.clipboard.copy_image(png) {
+            Ok(()) => format!("copied image ({} bytes)", png.len()),
+            Err(error) => format!("image copy failed: {error}"),
+        };
+    }
+
     pub fn viewport_offset(&self) -> ViewportOffset {
         self.viewport_offset
     }
@@ -699,6 +753,20 @@ impl App {
             Mode::Visual | Mode::VisualLine | Mode::VisualBlock
         ) {
             return None;
+        }
+
+        if self.mode == Mode::Normal
+            && let Some((image_page, image_index)) = self.focused_image
+        {
+            if image_page != page {
+                return None;
+            }
+            return self
+                .document
+                .pages
+                .get(page)
+                .and_then(|page| page.images.get(image_index))
+                .map(|image| image.bbox);
         }
 
         let cursor = self.current_text_cursor();
@@ -1023,8 +1091,12 @@ impl App {
         }
 
         match key.code {
+            KeyCode::Esc if self.focused_image.is_some() => self.clear_image_focus(),
             KeyCode::Esc => self.clear_search_highlight_and_reset(),
             KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Tab => self.cycle_image_focus(1),
+            KeyCode::BackTab => self.cycle_image_focus(-1),
+            KeyCode::Char('y') if self.focused_image.is_some() => self.request_image_copy(),
             KeyCode::Char('j') | KeyCode::Down => self.move_text_cursor_vertical_by_count(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_text_cursor_vertical_by_count(-1),
             KeyCode::Char('h') | KeyCode::Left => self.move_text_cursor_horizontal_by_count(-1),
@@ -1131,6 +1203,7 @@ impl App {
     }
 
     fn enter_visual_mode(&mut self, mode: Mode) {
+        self.focused_image = None;
         let cursor = self.current_text_cursor();
         self.mode = mode;
         self.text_cursor = Some(cursor);
@@ -1288,6 +1361,8 @@ impl App {
 
     fn set_text_cursor(&mut self, cursor: TextCursor) {
         let cursor = self.clamp_text_cursor(cursor);
+        self.focused_image = None;
+        self.pending_image_copy = None;
         self.text_cursor = Some(cursor);
         self.focus_text_cursor(cursor);
         self.status = if matches!(
@@ -1301,7 +1376,10 @@ impl App {
     }
 
     fn current_text_cursor(&self) -> TextCursor {
-        if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+        if matches!(
+            self.mode,
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
+        ) {
             return self
                 .clamp_text_cursor(self.text_cursor.unwrap_or_else(|| self.cursor_at_view()));
         }
@@ -1609,6 +1687,89 @@ impl App {
         let focus_y = project_pdf_center_y_to_page(focus_bbox, page.bbox, page_layout);
         let page_left = page_left_px(viewport.width, page_layout.bitmap_width);
 
+        self.viewport_offset.x = page_left
+            .saturating_add(focus_x)
+            .saturating_sub(viewport.width / 2);
+        self.viewport_offset.y = page_layout
+            .doc_y
+            .saturating_add(focus_y)
+            .saturating_sub(viewport.height / 2);
+        self.clamp_viewport_offset_with(&layout, viewport);
+        self.bump_render_nonce();
+    }
+
+    fn cycle_image_focus(&mut self, direction: isize) {
+        self.count_buffer.clear();
+        let current_page = self.cursor_page();
+        let targets = self
+            .document
+            .pages
+            .iter()
+            .enumerate()
+            .flat_map(|(page_index, page)| {
+                (0..page.images.len()).map(move |image_index| (page_index, image_index))
+            })
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            self.status = "document has no images".to_string();
+            return;
+        }
+
+        let target_index = match self
+            .focused_image
+            .and_then(|focused| targets.iter().position(|target| *target == focused))
+        {
+            Some(current) if direction < 0 => current.checked_sub(1).unwrap_or(targets.len() - 1),
+            Some(current) => (current + 1) % targets.len(),
+            None if direction < 0 => targets
+                .iter()
+                .rposition(|(page, _)| *page <= current_page)
+                .unwrap_or(targets.len() - 1),
+            None => targets
+                .iter()
+                .position(|(page, _)| *page >= current_page)
+                .unwrap_or(0),
+        };
+        let (page_index, image_index) = targets[target_index];
+        let page_image_count = self.document.pages[page_index].images.len();
+        let image = &self.document.pages[page_index].images[image_index];
+        let (bbox, pixel_width, pixel_height) = (image.bbox, image.pixel_width, image.pixel_height);
+        self.focused_image = Some((page_index, image_index));
+        self.pending_image_copy = None;
+        self.text_cursor = None;
+        self.focus_bbox(page_index, bbox);
+        self.status = format!(
+            "image {}/{} on page {} | {}x{} px | Tab next | Shift-Tab prev | y copy | Esc text",
+            image_index + 1,
+            page_image_count,
+            page_index + 1,
+            pixel_width,
+            pixel_height
+        );
+    }
+
+    fn clear_image_focus(&mut self) {
+        self.focused_image = None;
+        self.pending_image_copy = None;
+        self.status = self.default_status();
+        self.bump_render_nonce();
+    }
+
+    fn request_image_copy(&mut self) {
+        self.pending_image_copy = self.focused_image;
+        self.status = "copying image...".to_string();
+    }
+
+    fn focus_bbox(&mut self, page_index: usize, bbox: PdfRect) {
+        let viewport = self.viewport();
+        let layout = self.document_layout_for(viewport);
+        let Some(page_layout) = layout.pages.get(page_index).copied() else {
+            return;
+        };
+        let page = &self.document.pages[page_index];
+        let focus_x = project_pdf_center_x_to_page(bbox, page.bbox, page_layout);
+        let focus_y = project_pdf_center_y_to_page(bbox, page.bbox, page_layout);
+        let page_left = page_left_px(viewport.width, page_layout.bitmap_width);
         self.viewport_offset.x = page_left
             .saturating_add(focus_x)
             .saturating_sub(viewport.width / 2);
@@ -1989,6 +2150,8 @@ impl App {
     }
 
     fn move_to(&mut self, page: usize, line: usize) {
+        self.focused_image = None;
+        self.pending_image_copy = None;
         let viewport = self.viewport();
         let layout = self.document_layout_for(viewport);
         let page_index = page.min(self.document.page_count().saturating_sub(1));
@@ -2476,6 +2639,20 @@ impl App {
             );
         }
 
+        if let Some((page_index, image_index)) = self.focused_image
+            && let Some(page) = self.document.pages.get(page_index)
+            && let Some(image) = page.images.get(image_index)
+        {
+            return format!(
+                "image {}/{} on page {} | {}x{} px",
+                image_index + 1,
+                page.images.len(),
+                page_index + 1,
+                image.pixel_width,
+                image.pixel_height
+            );
+        }
+
         let page = self.cursor_page();
         format!(
             "line {}/{} | zoom {}%",
@@ -2821,14 +2998,122 @@ fn copy_to_system_clipboard(text: &str) -> io::Result<()> {
     }
 }
 
+fn copy_image_to_system_clipboard(png: &[u8]) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let path = write_temporary_png(png)?;
+        let status = Command::new("osascript")
+            .env("TERMPDF_CLIPBOARD_IMAGE", &path)
+            .args([
+                "-e",
+                "set the clipboard to (read (POSIX file (system attribute \"TERMPDF_CLIPBOARD_IMAGE\")) as \u{00ab}class PNGf\u{00bb})",
+            ])
+            .status();
+        let _ = std::fs::remove_file(path);
+        require_successful_command("osascript", status)
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let path = write_temporary_png(png)?;
+        let status = Command::new("powershell.exe")
+            .env("TERMPDF_CLIPBOARD_IMAGE", &path)
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-STA",
+                "-Command",
+                "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $image = [System.Drawing.Image]::FromFile($env:TERMPDF_CLIPBOARD_IMAGE); try { [System.Windows.Forms.Clipboard]::SetImage($image) } finally { $image.Dispose() }",
+            ])
+            .status();
+        let _ = std::fs::remove_file(path);
+        require_successful_command("powershell.exe", status)
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        for (program, args) in [
+            ("wl-copy", vec!["--type", "image/png"]),
+            ("xclip", vec!["-selection", "clipboard", "-t", "image/png"]),
+        ] {
+            if write_bytes_to_command(program, &args, png).is_ok() {
+                return Ok(());
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no supported image clipboard command found (tried wl-copy, xclip)",
+        ))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = png;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "image clipboard copy is not supported on this platform",
+        ))
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn write_temporary_png(png: &[u8]) -> io::Result<PathBuf> {
+    let timestamp = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    for attempt in 0..100 {
+        let path = std::env::temp_dir().join(format!(
+            "termpdf-clipboard-{}-{timestamp}-{attempt}.png",
+            std::process::id()
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(png)?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "failed to allocate a temporary image clipboard file",
+    ))
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn require_successful_command(
+    program: &str,
+    status: io::Result<std::process::ExitStatus>,
+) -> io::Result<()> {
+    let status = status?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "clipboard command {program} exited with {status}"
+        )))
+    }
+}
+
 fn write_text_to_command(program: &str, args: &[&str], text: &str) -> io::Result<()> {
+    write_bytes_to_command(program, args, text.as_bytes())
+}
+
+fn write_bytes_to_command(program: &str, args: &[&str], bytes: &[u8]) -> io::Result<()> {
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::piped())
         .spawn()?;
 
     if let Some(stdin) = child.stdin.as_mut() {
-        stdin.write_all(text.as_bytes())?;
+        stdin.write_all(bytes)?;
     }
 
     let status = child.wait()?;
