@@ -8,14 +8,17 @@ use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::document::{Document, LinkTarget, PageLink, PdfRect};
+use crate::document::{Document, LinkTarget, PageLink, PdfImageAsset, PdfMatrix, PdfRect};
 
-pub const LAYOUT_SCHEMA: &str = "termpdf.layout.v1";
+pub const LAYOUT_SCHEMA: &str = "termpdf.layout.v2";
+pub const LEGACY_LAYOUT_SCHEMA: &str = "termpdf.layout.v1";
 pub const MANIFEST_FILE: &str = "manifest.json";
 pub const PAGES_FILE: &str = "pages.jsonl";
 pub const BLOCKS_FILE: &str = "blocks.jsonl";
 pub const GLYPHS_FILE: &str = "glyphs.jsonl";
+pub const IMAGES_FILE: &str = "images.jsonl";
 pub const REFS_FILE: &str = "refs.jsonl";
+pub const ASSETS_DIR: &str = "assets";
 
 const TEXT_PREVIEW_CHARS: usize = 80;
 
@@ -88,6 +91,7 @@ pub struct LayoutFiles {
     pub pages: &'static str,
     pub blocks: &'static str,
     pub glyphs: &'static str,
+    pub images: &'static str,
     pub refs: &'static str,
 }
 
@@ -106,6 +110,29 @@ impl From<PdfRect> for LayoutRect {
             y: rect.y,
             width: rect.width,
             height: rect.height,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct LayoutMatrix {
+    pub a: f32,
+    pub b: f32,
+    pub c: f32,
+    pub d: f32,
+    pub e: f32,
+    pub f: f32,
+}
+
+impl From<PdfMatrix> for LayoutMatrix {
+    fn from(matrix: PdfMatrix) -> Self {
+        Self {
+            a: matrix.a,
+            b: matrix.b,
+            c: matrix.c,
+            d: matrix.d,
+            e: matrix.e,
+            f: matrix.f,
         }
     }
 }
@@ -161,6 +188,23 @@ pub struct LayoutGlyph {
     pub bbox: LayoutRect,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LayoutImage {
+    #[serde(rename = "ref")]
+    pub ref_id: String,
+    pub kind: LayoutKind,
+    pub page_ref: String,
+    pub page_index: usize,
+    pub image_index: usize,
+    pub reading_order: usize,
+    pub bbox: LayoutRect,
+    pub matrix: LayoutMatrix,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub asset: String,
+    pub sha256: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind")]
 pub enum LayoutLinkTarget {
@@ -194,6 +238,7 @@ pub enum LayoutKind {
     TextLine,
     Glyph,
     Link,
+    Image,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -202,6 +247,8 @@ pub struct LayoutPack {
     pub pages: Vec<LayoutPage>,
     pub blocks: Vec<LayoutBlock>,
     pub glyphs: Vec<LayoutGlyph>,
+    pub images: Vec<LayoutImage>,
+    pub image_assets: Vec<PdfImageAsset>,
     pub refs: Vec<LayoutRef>,
 }
 
@@ -241,6 +288,14 @@ pub struct LayoutGrepRange {
 
 impl LayoutPack {
     pub fn from_document(document: &Document, source: SourceMetadata) -> Self {
+        Self::from_document_with_images(document, source, Vec::new())
+    }
+
+    pub fn from_document_with_images(
+        document: &Document,
+        source: SourceMetadata,
+        image_assets: Vec<PdfImageAsset>,
+    ) -> Self {
         let manifest = LayoutManifest {
             schema: LAYOUT_SCHEMA,
             termpdf_version: env!("CARGO_PKG_VERSION"),
@@ -259,6 +314,7 @@ impl LayoutPack {
                 pages: PAGES_FILE,
                 blocks: BLOCKS_FILE,
                 glyphs: GLYPHS_FILE,
+                images: IMAGES_FILE,
                 refs: REFS_FILE,
             },
         };
@@ -266,6 +322,7 @@ impl LayoutPack {
         let mut pages = Vec::with_capacity(document.pages.len());
         let mut blocks = Vec::new();
         let mut glyphs = Vec::new();
+        let mut images = Vec::new();
         let mut refs = Vec::new();
 
         for (page_index, page) in document.pages.iter().enumerate() {
@@ -358,6 +415,41 @@ impl LayoutPack {
                     target_file: BLOCKS_FILE,
                 });
             }
+
+            for (image_index, image) in page.images.iter().enumerate() {
+                let ref_id = image_ref(page_index, image_index);
+                let bbox = LayoutRect::from(image.bbox);
+                let asset = image_asset_path(page_index, image_index);
+                let sha256 = image_assets
+                    .iter()
+                    .find(|candidate| {
+                        candidate.page == page_index && candidate.image == image_index
+                    })
+                    .map(|asset| sha256_bytes(&asset.png))
+                    .unwrap_or_default();
+                images.push(LayoutImage {
+                    ref_id: ref_id.clone(),
+                    kind: LayoutKind::Image,
+                    page_ref: page_ref.clone(),
+                    page_index,
+                    image_index,
+                    reading_order: image_index + 1,
+                    bbox,
+                    matrix: LayoutMatrix::from(image.matrix),
+                    pixel_width: image.pixel_width,
+                    pixel_height: image.pixel_height,
+                    asset: asset.clone(),
+                    sha256,
+                });
+                refs.push(LayoutRef {
+                    ref_id,
+                    kind: LayoutKind::Image,
+                    page_ref: Some(page_ref.clone()),
+                    bbox: Some(bbox),
+                    text_preview: None,
+                    target_file: IMAGES_FILE,
+                });
+            }
         }
 
         Self {
@@ -365,6 +457,8 @@ impl LayoutPack {
             pages,
             blocks,
             glyphs,
+            images,
+            image_assets,
             refs,
         }
     }
@@ -374,6 +468,7 @@ impl LayoutPack {
         output_dir: &Path,
         options: LayoutWriteOptions,
     ) -> Result<LayoutWriteResult> {
+        self.validate_image_assets()?;
         validate_output_dir(output_dir, options.overwrite)?;
         let staging_dir = create_staging_dir(output_dir)?;
         let write_result = (|| -> Result<()> {
@@ -381,7 +476,9 @@ impl LayoutPack {
             write_jsonl(staging_dir.join(PAGES_FILE), &self.pages)?;
             write_jsonl(staging_dir.join(BLOCKS_FILE), &self.blocks)?;
             write_jsonl(staging_dir.join(GLYPHS_FILE), &self.glyphs)?;
+            write_jsonl(staging_dir.join(IMAGES_FILE), &self.images)?;
             write_jsonl(staging_dir.join(REFS_FILE), &self.refs)?;
+            write_image_assets(&staging_dir, &self.image_assets)?;
             Ok(())
         })();
 
@@ -395,6 +492,66 @@ impl LayoutPack {
         Ok(LayoutWriteResult {
             output_dir: output_dir.to_path_buf(),
         })
+    }
+
+    fn validate_image_assets(&self) -> Result<()> {
+        if self.images.len() != self.image_assets.len() {
+            bail!(
+                "layout contains {} image records but {} PNG assets",
+                self.images.len(),
+                self.image_assets.len()
+            );
+        }
+
+        let mut seen = HashSet::new();
+        for asset in &self.image_assets {
+            let key = (asset.page, asset.image);
+            if !seen.insert(key) {
+                bail!(
+                    "layout contains duplicate PNG asset for p{}.image{}",
+                    asset.page + 1,
+                    asset.image + 1
+                );
+            }
+            if !asset.png.starts_with(b"\x89PNG\r\n\x1a\n") {
+                bail!(
+                    "image asset p{}.image{} is not a PNG",
+                    asset.page + 1,
+                    asset.image + 1
+                );
+            }
+            image::load_from_memory_with_format(&asset.png, image::ImageFormat::Png)
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to decode PNG asset p{}.image{}",
+                        asset.page + 1,
+                        asset.image + 1
+                    )
+                })?;
+
+            let Some(image) = self
+                .images
+                .iter()
+                .find(|image| image.page_index == asset.page && image.image_index == asset.image)
+            else {
+                bail!(
+                    "PNG asset p{}.image{} has no matching image record",
+                    asset.page + 1,
+                    asset.image + 1
+                );
+            };
+            if image.asset != image_asset_path(asset.page, asset.image)
+                || image.sha256 != sha256_bytes(&asset.png)
+            {
+                bail!(
+                    "PNG asset metadata does not match p{}.image{}",
+                    asset.page + 1,
+                    asset.image + 1
+                );
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -523,6 +680,14 @@ pub fn link_ref(page_index: usize, link_index: usize) -> String {
     format!("{}.link{}", page_ref(page_index), link_index + 1)
 }
 
+pub fn image_ref(page_index: usize, image_index: usize) -> String {
+    format!("{}.image{}", page_ref(page_index), image_index + 1)
+}
+
+fn image_asset_path(page_index: usize, image_index: usize) -> String {
+    format!("{ASSETS_DIR}/{}.png", image_ref(page_index, image_index))
+}
+
 fn text_preview(text: &str) -> String {
     let mut preview = text.chars().take(TEXT_PREVIEW_CHARS).collect::<String>();
     if text.chars().count() > TEXT_PREVIEW_CHARS {
@@ -616,7 +781,7 @@ fn ensure_layout_pack_dir(layout_dir: &Path) -> Result<()> {
         .wrap_err_with(|| format!("failed to read {}", manifest_path.display()))?;
     let manifest = serde_json::from_str::<serde_json::Value>(&manifest)
         .wrap_err_with(|| format!("failed to parse {}", manifest_path.display()))?;
-    if manifest.get("schema").and_then(|value| value.as_str()) != Some(LAYOUT_SCHEMA) {
+    if !is_supported_layout_schema(manifest.get("schema").and_then(|value| value.as_str())) {
         bail!(
             "unsupported layout pack schema in {}",
             manifest_path.display()
@@ -714,6 +879,12 @@ fn is_layout_pack_dir(output_dir: &Path, entries: &[fs::DirEntry]) -> Result<boo
         let Some(name) = name.to_str() else {
             return Ok(false);
         };
+        if name == ASSETS_DIR {
+            if !entry.file_type()?.is_dir() || !is_image_assets_dir(&entry.path())? {
+                return Ok(false);
+            }
+            continue;
+        }
         if !allowed.contains(name) {
             return Ok(false);
         }
@@ -734,7 +905,24 @@ fn is_layout_pack_dir(output_dir: &Path, entries: &[fs::DirEntry]) -> Result<boo
         .wrap_err_with(|| format!("failed to read {}", manifest_path.display()))?;
     let manifest = serde_json::from_str::<serde_json::Value>(&manifest)
         .wrap_err_with(|| format!("failed to parse {}", manifest_path.display()))?;
-    Ok(manifest.get("schema").and_then(|value| value.as_str()) == Some(LAYOUT_SCHEMA))
+    let schema = manifest.get("schema").and_then(|value| value.as_str());
+    if !is_supported_layout_schema(schema) {
+        return Ok(false);
+    }
+
+    let mut required = vec![
+        MANIFEST_FILE,
+        PAGES_FILE,
+        BLOCKS_FILE,
+        GLYPHS_FILE,
+        REFS_FILE,
+    ];
+    if schema == Some(LAYOUT_SCHEMA) {
+        required.push(IMAGES_FILE);
+    }
+    Ok(required
+        .into_iter()
+        .all(|name| output_dir.join(name).is_file()))
 }
 
 fn layout_file_names() -> HashSet<&'static str> {
@@ -743,10 +931,56 @@ fn layout_file_names() -> HashSet<&'static str> {
         PAGES_FILE,
         BLOCKS_FILE,
         GLYPHS_FILE,
+        IMAGES_FILE,
         REFS_FILE,
     ]
     .into_iter()
     .collect()
+}
+
+fn write_image_assets(staging_dir: &Path, assets: &[PdfImageAsset]) -> Result<()> {
+    if assets.is_empty() {
+        return Ok(());
+    }
+
+    let assets_dir = staging_dir.join(ASSETS_DIR);
+    fs::create_dir(&assets_dir)
+        .wrap_err_with(|| format!("failed to create {}", assets_dir.display()))?;
+    for asset in assets {
+        let path = staging_dir.join(image_asset_path(asset.page, asset.image));
+        fs::write(&path, &asset.png)
+            .wrap_err_with(|| format!("failed to write image asset {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn is_image_assets_dir(path: &Path) -> Result<bool> {
+    for entry in fs::read_dir(path)
+        .wrap_err_with(|| format!("failed to read image assets directory {}", path.display()))?
+    {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let is_png = entry
+            .path()
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.eq_ignore_ascii_case("png"))
+            .unwrap_or(false);
+        if !file_type.is_file() || !is_png {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn is_supported_layout_schema(schema: Option<&str>) -> bool {
+    matches!(schema, Some(LAYOUT_SCHEMA | LEGACY_LAYOUT_SCHEMA))
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
 }
 
 fn write_json_pretty<T: Serialize>(path: PathBuf, value: &T) -> Result<()> {

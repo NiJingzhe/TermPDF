@@ -1,12 +1,16 @@
 use std::fs;
+use std::io::Cursor;
 use std::path::PathBuf;
 
 use serde_json::Value;
-use termpdf::document::{Document, LinkTarget, Page, PageLink, PdfRect};
+use termpdf::document::{
+    Document, LinkTarget, Page, PageLink, PdfImage, PdfImageAsset, PdfMatrix, PdfRect,
+};
 use termpdf::layout::{
-    BLOCKS_FILE, GLYPHS_FILE, LAYOUT_SCHEMA, LayoutBlock, LayoutKind, LayoutLinkTarget, LayoutPack,
-    LayoutWriteOptions, MANIFEST_FILE, PAGES_FILE, REFS_FILE, SourceMetadata,
-    default_layout_output_dir, glyph_ref, grep_layout_pack, link_ref, page_ref, text_line_ref,
+    ASSETS_DIR, BLOCKS_FILE, GLYPHS_FILE, IMAGES_FILE, LAYOUT_SCHEMA, LEGACY_LAYOUT_SCHEMA,
+    LayoutBlock, LayoutKind, LayoutLinkTarget, LayoutPack, LayoutWriteOptions, MANIFEST_FILE,
+    PAGES_FILE, REFS_FILE, SourceMetadata, default_layout_output_dir, glyph_ref, grep_layout_pack,
+    image_ref, link_ref, page_ref, text_line_ref,
 };
 
 fn source_metadata() -> SourceMetadata {
@@ -42,12 +46,42 @@ fn document_with_links() -> Document {
     Document { pages: vec![page] }
 }
 
+fn document_with_image() -> Document {
+    let mut page = Page::from_text(0, &["illustrated"]);
+    page.images.push(PdfImage {
+        bbox: PdfRect::new(12.0, 34.0, 56.0, 78.0),
+        matrix: PdfMatrix {
+            a: 56.0,
+            b: 0.0,
+            c: 0.0,
+            d: 78.0,
+            e: 12.0,
+            f: 34.0,
+        },
+        pixel_width: 2,
+        pixel_height: 3,
+        page: 0,
+        object_path: vec![4, 1],
+    });
+    Document { pages: vec![page] }
+}
+
+fn test_png() -> Vec<u8> {
+    let image = image::RgbaImage::from_pixel(2, 3, image::Rgba([12, 34, 56, 255]));
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    png
+}
+
 #[test]
 fn stable_ref_helpers_are_one_based_and_namespaced() {
     assert_eq!(page_ref(0), "p1");
     assert_eq!(text_line_ref(0, 1), "p1.t2");
     assert_eq!(glyph_ref(0, 1, 2), "p1.t2.c3");
     assert_eq!(link_ref(0, 2), "p1.link3");
+    assert_eq!(image_ref(0, 2), "p1.image3");
 }
 
 #[test]
@@ -188,6 +222,7 @@ fn empty_page_keeps_page_ref_without_blocks_or_glyphs() {
             lines: Vec::new(),
             bbox: PdfRect::new(0.0, 0.0, 200.0, 300.0),
             links: Vec::new(),
+            images: Vec::new(),
         }],
     };
     let pack = LayoutPack::from_document(&document, source_metadata());
@@ -213,6 +248,7 @@ fn writer_outputs_complete_json_pack() {
         PAGES_FILE,
         BLOCKS_FILE,
         GLYPHS_FILE,
+        IMAGES_FILE,
         REFS_FILE,
     ] {
         assert!(output.join(file_name).exists(), "missing {file_name}");
@@ -230,6 +266,106 @@ fn writer_outputs_complete_json_pack() {
             serde_json::from_str::<Value>(line).unwrap();
         }
     }
+}
+
+#[test]
+fn layout_v2_writes_image_metadata_refs_and_png_assets() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("sample.layout");
+    let png = test_png();
+    let pack = LayoutPack::from_document_with_images(
+        &document_with_image(),
+        source_metadata(),
+        vec![PdfImageAsset {
+            page: 0,
+            image: 0,
+            png: png.clone(),
+        }],
+    );
+
+    assert_eq!(pack.images.len(), 1);
+    let image = &pack.images[0];
+    assert_eq!(image.ref_id, "p1.image1");
+    assert_eq!(image.kind, LayoutKind::Image);
+    assert_eq!(image.page_ref, "p1");
+    assert_eq!(image.pixel_width, 2);
+    assert_eq!(image.pixel_height, 3);
+    assert_eq!(image.asset, "assets/p1.image1.png");
+    assert_eq!(image.sha256.len(), 64);
+    assert!(pack.refs.iter().any(|entry| {
+        entry.ref_id == "p1.image1"
+            && entry.kind == LayoutKind::Image
+            && entry.target_file == IMAGES_FILE
+    }));
+
+    pack.write_to_dir(&output, LayoutWriteOptions::new(false))
+        .unwrap();
+    let asset = fs::read(output.join(ASSETS_DIR).join("p1.image1.png")).unwrap();
+    assert_eq!(asset, png);
+    let decoded = image::load_from_memory(&asset).unwrap();
+    assert_eq!((decoded.width(), decoded.height()), (2, 3));
+
+    let metadata = fs::read_to_string(output.join(IMAGES_FILE)).unwrap();
+    let metadata: Value = serde_json::from_str(metadata.trim()).unwrap();
+    assert_eq!(metadata["kind"], "image");
+    assert_eq!(metadata["ref"], "p1.image1");
+    assert_eq!(metadata["matrix"]["e"], 12.0);
+}
+
+#[test]
+fn layout_v2_rejects_missing_or_invalid_image_assets() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing_output = temp.path().join("missing.layout");
+    let missing = LayoutPack::from_document(&document_with_image(), source_metadata());
+
+    assert!(
+        missing
+            .write_to_dir(&missing_output, LayoutWriteOptions::new(false))
+            .is_err()
+    );
+    assert!(!missing_output.exists());
+
+    let invalid_output = temp.path().join("invalid.layout");
+    let invalid = LayoutPack::from_document_with_images(
+        &document_with_image(),
+        source_metadata(),
+        vec![PdfImageAsset {
+            page: 0,
+            image: 0,
+            png: b"not a PNG".to_vec(),
+        }],
+    );
+    assert!(
+        invalid
+            .write_to_dir(&invalid_output, LayoutWriteOptions::new(false))
+            .is_err()
+    );
+    assert!(!invalid_output.exists());
+}
+
+#[test]
+fn grep_accepts_legacy_v1_layout_pack() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("legacy.layout");
+    let pack = LayoutPack::from_document(&document_with_links(), source_metadata());
+    pack.write_to_dir(&output, LayoutWriteOptions::new(false))
+        .unwrap();
+    let manifest_path = output.join(MANIFEST_FILE);
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    fs::write(
+        manifest_path,
+        manifest.replace(LAYOUT_SCHEMA, LEGACY_LAYOUT_SCHEMA),
+    )
+    .unwrap();
+
+    let matches = grep_layout_pack(
+        &output,
+        "alpha",
+        termpdf::layout::LayoutGrepOptions::new(false, false),
+    )
+    .unwrap();
+
+    assert_eq!(matches[0].ref_id, "p1.t1");
 }
 
 #[test]
@@ -394,6 +530,25 @@ fn writer_refuses_directory_with_wrong_manifest_schema() {
         pack.write_to_dir(&output, LayoutWriteOptions::new(true))
             .is_err()
     );
+}
+
+#[test]
+fn writer_refuses_incomplete_layout_directory_with_valid_manifest_schema() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("sample.layout");
+    fs::create_dir(&output).unwrap();
+    fs::write(
+        output.join(MANIFEST_FILE),
+        format!(r#"{{"schema":"{LAYOUT_SCHEMA}"}}"#),
+    )
+    .unwrap();
+    let pack = LayoutPack::from_document(&document_with_links(), source_metadata());
+
+    assert!(
+        pack.write_to_dir(&output, LayoutWriteOptions::new(true))
+            .is_err()
+    );
+    assert!(output.join(MANIFEST_FILE).exists());
 }
 
 #[cfg(unix)]

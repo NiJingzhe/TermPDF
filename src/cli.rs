@@ -51,7 +51,9 @@ pub struct GrepOptions {
         gg / {count}gg / G  Jump to page\n  \
         /, n, N, Esc         Search, navigate, hide highlight\n  \
         f / F                Follow visible links\n  \
-        v / V / y            Select text/lines and copy to clipboard\n  \
+        Tab / Shift-Tab      Focus next/previous PDF image\n  \
+        y                    Copy focused image as PNG\n  \
+        v / V / Ctrl-v / y  Select text and copy to clipboard\n  \
         m<char> / `<char>    Set and jump to marks\n  \
         F5                   Presentation mode\n  \
         = / - / 0            Zoom in / out / reset\n  \
@@ -99,8 +101,9 @@ enum CliSubcommand {
     /// Extract a stable layout pack for agents and LLMs.
     #[command(
         long_about = "Extract a stable layout pack for agents and LLMs.\n\n\
-            Each layout pack contains manifest.json, pages.jsonl, blocks.jsonl, glyphs.jsonl, \
-            and refs.jsonl with stable one-based refs like p1, p1.t1, p1.t1.c1, and p1.link1.",
+            Each layout pack contains manifest.json, JSONL metadata for pages, text, glyphs, \
+            images, and refs, plus processed PNG assets. Stable one-based refs include p1, \
+            p1.t1, p1.t1.c1, p1.link1, and p1.image1.",
         after_help = "Examples:\n  \
             termpdf extract paper.pdf                         Write paper.layout/ next to the PDF\n  \
             termpdf extract paper.pdf --out out.layout        Write to a custom directory\n  \

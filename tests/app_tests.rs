@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use termpdf::app::{App, Mode};
-use termpdf::document::{Document, Page};
+use termpdf::document::{Document, Page, PdfImage, PdfMatrix, PdfRect};
 use termpdf::render::{CellPixels, ViewportPixels, build_document_layout, current_page_for_scroll};
 
 #[test]
@@ -393,6 +393,74 @@ fn normal_mode_exposes_visible_cursor_bounds() {
 }
 
 #[test]
+fn tab_and_backtab_cycle_image_focus_across_pages() {
+    let mut app = App::new(document_with_images());
+
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(app.focused_image(), Some((0, 0)));
+    assert_eq!(
+        app.cursor_bounds_for_page(0),
+        Some(PdfRect::new(10.0, 20.0, 30.0, 40.0))
+    );
+
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(app.focused_image(), Some((0, 1)));
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(app.focused_image(), Some((1, 0)));
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(app.focused_image(), Some((0, 0)));
+
+    app.handle_key(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(app.focused_image(), Some((1, 0)));
+    assert!(app.status().contains("y copy"));
+}
+
+#[test]
+fn image_focus_is_cleared_by_escape_or_text_motion() {
+    let mut app = App::new(document_with_images());
+
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    app.handle_key(KeyEvent::from(KeyCode::Esc));
+    assert_eq!(app.focused_image(), None);
+
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+    assert_eq!(app.focused_image(), None);
+    assert!(app.cursor_bounds_for_page(0).is_some());
+}
+
+#[test]
+fn text_motion_after_cross_page_image_focus_stays_on_focused_page() {
+    let mut app = App::new(document_with_images());
+
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(app.focused_image(), Some((1, 0)));
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+
+    assert_eq!(app.focused_image(), None);
+    assert_eq!(app.text_cursor().page, 1);
+}
+
+#[test]
+fn focused_image_y_requests_lazy_png_copy() {
+    let (mut app, clipboard) = App::with_memory_clipboard_for_tests(document_with_images());
+
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    app.handle_key(KeyEvent::from(KeyCode::Char('y')));
+
+    assert_eq!(app.pending_image_copy(), Some((0, 0)));
+    assert!(clipboard.image().is_none());
+
+    let png = b"\x89PNG\r\n\x1a\nimage bytes";
+    app.complete_image_copy(png);
+    assert_eq!(clipboard.image().as_deref(), Some(png.as_slice()));
+    assert!(app.status().contains("copied image"));
+}
+
+#[test]
 fn normal_mode_h_and_l_move_text_cursor_without_selection() {
     let mut app = App::new(common::sample_document());
 
@@ -687,6 +755,37 @@ fn sample_document_with_pages(page_count: usize, lines_per_page: usize) -> Docum
                 Page::from_text(page_index, &refs)
             })
             .collect(),
+    }
+}
+
+fn document_with_images() -> Document {
+    let mut pages = vec![
+        Page::from_text(0, &["first page"]),
+        Page::from_text(1, &["second page"]),
+    ];
+    pages[0].images = vec![
+        test_image(0, 10.0, 20.0, 30.0, 40.0),
+        test_image(0, 80.0, 100.0, 50.0, 60.0),
+    ];
+    pages[1].images = vec![test_image(1, 15.0, 25.0, 35.0, 45.0)];
+    Document { pages }
+}
+
+fn test_image(page: usize, x: f32, y: f32, width: f32, height: f32) -> PdfImage {
+    PdfImage {
+        bbox: PdfRect::new(x, y, width, height),
+        matrix: PdfMatrix {
+            a: width,
+            b: 0.0,
+            c: 0.0,
+            d: height,
+            e: x,
+            f: y,
+        },
+        pixel_width: width as u32,
+        pixel_height: height as u32,
+        page,
+        object_path: vec![0],
     }
 }
 

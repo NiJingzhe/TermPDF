@@ -78,7 +78,7 @@ fn document_paragraph(app: &App, area: Rect) -> Paragraph<'static> {
 
     let active_line = app.cursor_line();
     let active_match = app.active_search_match();
-    let text_cursor = if app.mode() == Mode::Normal {
+    let text_cursor = if app.mode() == Mode::Normal && app.focused_image().is_none() {
         Some(app.text_cursor())
     } else {
         None
@@ -90,7 +90,7 @@ fn document_paragraph(app: &App, area: Rect) -> Paragraph<'static> {
         .iter()
         .enumerate()
         .map(|(line_index, line)| {
-            let is_cursor = line_index == active_line;
+            let is_cursor = app.focused_image().is_none() && line_index == active_line;
             let is_match = active_match
                 .map(|matched| matched.page == app.cursor_page() && matched.line == line_index)
                 .unwrap_or(false);
@@ -128,7 +128,7 @@ fn document_paragraph(app: &App, area: Rect) -> Paragraph<'static> {
 
 fn status_paragraph(app: &App) -> Paragraph<'static> {
     let mode = app.mode();
-    let chips = mode_keybinding_chips(mode);
+    let chips = mode_keybinding_chips(app);
     let mut line_spans = vec![mode_prefix(mode)];
     if !chips.is_empty() {
         line_spans.push(section_divider());
@@ -163,9 +163,16 @@ fn page_label(app: &App) -> String {
     )
 }
 
-fn mode_keybinding_chips(mode: Mode) -> Vec<Span<'static>> {
-    match mode {
+fn mode_keybinding_chips(app: &App) -> Vec<Span<'static>> {
+    match app.mode() {
+        Mode::Normal if app.focused_image().is_some() => vec![
+            status_chip("Tab", "next", Color::Cyan, Color::Black),
+            status_chip("S-Tab", "prev", Color::Blue, Color::White),
+            status_chip("y", "copy PNG", Color::Green, Color::Black),
+            status_chip("Esc", "text", Color::Yellow, Color::Black),
+        ],
         Mode::Normal => vec![
+            status_chip("Tab", "images", Color::Green, Color::Black),
             status_chip("/", "search", Color::Yellow, Color::Black),
             status_chip("f", "links", Color::Cyan, Color::Black),
             status_chip("m", "mark", Color::Magenta, Color::Black),
