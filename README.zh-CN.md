@@ -8,6 +8,13 @@ TermPDF 是一个终端 PDF 阅读器，使用 Rust、ratatui、PDFium 和 Kitty
 
 ## 更新日志
 
+### 0.4.1
+
+- 基于整页 glyph 归属和视觉行几何重建 PDF 文本抽取，提高字符完整性、文本行 bbox 准确性和内联标注位置。
+- 新增保守的双栏阅读顺序：要求重复行证据，并支持在栏区之间插入整页宽标题和短居中标题。
+- layout pack 新增 `text.txt`，每个文本行输出一条适合 Agent 和人类阅读的 `p1.t1<TAB>内容` 记录。
+- 新增生成式 PDF 回归，覆盖双栏顺序、跨栏标题、表格误判、glyph containment 和 fallback annotation。
+
 ### 0.4.0
 
 - 新增递归 PDF 图片抽取，包括嵌套在 Form XObject 中的图片，并在 layout pack 中输出处理后的 PNG assets。
@@ -85,8 +92,8 @@ brew install NiJingzhe/termpdf/termpdf
 从 GitHub Releases 页面下载适合你平台的压缩包，然后解压：
 
 ```bash
-tar -xzf termpdf-0.4.0-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.4.0-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.4.1-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.4.1-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 
@@ -198,6 +205,7 @@ termpdf extract paper.pdf --overwrite
 - `manifest.json`：schema、TermPDF 版本、源 PDF hash、坐标系统和文件映射
 - `pages.jsonl`：每页一条记录
 - `blocks.jsonl`：文本行和链接记录
+- `text.txt`：按阅读顺序输出的纯文本，每行使用 `p1.t1<TAB>内容` 标记
 - `glyphs.jsonl`：每个可见字符一条精确 glyph 记录
 - `images.jsonl`：图片 bbox、变换矩阵、源像素尺寸、PNG 路径和 SHA-256
 - `refs.jsonl`：用于快速查询的全局引用注册表
@@ -213,6 +221,13 @@ p1.t1        第 1 页第 1 条文本行
 p1.t1.c1     第 1 页第 1 条文本行的第 1 个字符
 p1.link1     第 1 页第 1 个链接
 p1.image1    第 1 页第 1 张图片（`assets/p1.image1.png`）
+```
+
+`text.txt` 是更适合人类和 Agent 阅读的纯文本视图。每个 PDF 文本行对应一行输出，开头是稳定的页码/文本行 ref，之后用一个 tab 分隔内容：
+
+```text
+p1.t1\tSyzSpec: Specification Generation for Linux Kernel Fuzzing via
+p1.t2\tUnder-Constrained Symbolic Execution
 ```
 
 layout schema 为 `termpdf.layout.v2`。bbox 使用 PDF points，原点在左下角，与 PDFium 抽取和 TermPDF 渲染投影保持一致。`termpdf grep` 也支持旧版 `termpdf.layout.v1` pack。

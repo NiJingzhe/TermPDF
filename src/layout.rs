@@ -15,6 +15,7 @@ pub const LEGACY_LAYOUT_SCHEMA: &str = "termpdf.layout.v1";
 pub const MANIFEST_FILE: &str = "manifest.json";
 pub const PAGES_FILE: &str = "pages.jsonl";
 pub const BLOCKS_FILE: &str = "blocks.jsonl";
+pub const TEXT_FILE: &str = "text.txt";
 pub const GLYPHS_FILE: &str = "glyphs.jsonl";
 pub const IMAGES_FILE: &str = "images.jsonl";
 pub const REFS_FILE: &str = "refs.jsonl";
@@ -90,6 +91,7 @@ pub struct CoordinateSystem {
 pub struct LayoutFiles {
     pub pages: &'static str,
     pub blocks: &'static str,
+    pub text: &'static str,
     pub glyphs: &'static str,
     pub images: &'static str,
     pub refs: &'static str,
@@ -313,6 +315,7 @@ impl LayoutPack {
             files: LayoutFiles {
                 pages: PAGES_FILE,
                 blocks: BLOCKS_FILE,
+                text: TEXT_FILE,
                 glyphs: GLYPHS_FILE,
                 images: IMAGES_FILE,
                 refs: REFS_FILE,
@@ -475,6 +478,7 @@ impl LayoutPack {
             write_json_pretty(staging_dir.join(MANIFEST_FILE), &self.manifest)?;
             write_jsonl(staging_dir.join(PAGES_FILE), &self.pages)?;
             write_jsonl(staging_dir.join(BLOCKS_FILE), &self.blocks)?;
+            write_plain_text(staging_dir.join(TEXT_FILE), &self.blocks)?;
             write_jsonl(staging_dir.join(GLYPHS_FILE), &self.glyphs)?;
             write_jsonl(staging_dir.join(IMAGES_FILE), &self.images)?;
             write_jsonl(staging_dir.join(REFS_FILE), &self.refs)?;
@@ -930,6 +934,7 @@ fn layout_file_names() -> HashSet<&'static str> {
         MANIFEST_FILE,
         PAGES_FILE,
         BLOCKS_FILE,
+        TEXT_FILE,
         GLYPHS_FILE,
         IMAGES_FILE,
         REFS_FILE,
@@ -1006,6 +1011,27 @@ fn write_jsonl<T: Serialize>(path: PathBuf, values: &[T]) -> Result<()> {
     writer
         .flush()
         .wrap_err_with(|| format!("failed to flush {}", path.display()))
+}
+
+fn write_plain_text(path: PathBuf, blocks: &[LayoutBlock]) -> Result<()> {
+    let file =
+        File::create(&path).wrap_err_with(|| format!("failed to create {}", path.display()))?;
+    let mut writer = BufWriter::new(file);
+    for block in blocks {
+        let LayoutBlock::TextLine { ref_id, text, .. } = block else {
+            continue;
+        };
+        let text = text
+            .chars()
+            .map(|ch| if ch.is_control() { ' ' } else { ch })
+            .collect::<String>();
+        let text = text.trim_end();
+        writeln!(writer, "{ref_id}\t{text}")
+            .wrap_err_with(|| format!("failed to write plain text {}", path.display()))?;
+    }
+    writer
+        .flush()
+        .wrap_err_with(|| format!("failed to flush plain text {}", path.display()))
 }
 
 fn read_jsonl<T>(path: &Path) -> Result<Vec<T>>

@@ -8,6 +8,13 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 
 ## CHANGELOG
 
+### 0.4.1
+
+- Rebuilt PDF text extraction around page-wide glyph ownership and visual line geometry, improving character completeness, line bounding boxes, and inline annotation placement.
+- Added conservative two-column reading order with repeated row evidence and support for full-width and short centered headings between column regions.
+- Added `text.txt` to extracted layout packs with one agent- and human-readable `p1.t1<TAB>content` record per text line.
+- Added generated-PDF regressions for column ordering, spanning headings, table false positives, glyph containment, and fallback annotations.
+
 ### 0.4.0
 
 - Added recursive PDF image extraction, including images nested inside Form XObjects, with processed PNG assets in layout packs.
@@ -85,8 +92,8 @@ brew install NiJingzhe/termpdf/termpdf
 Download the archive for your platform from the GitHub Releases page, then extract it:
 
 ```bash
-tar -xzf termpdf-0.4.0-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.4.0-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.4.1-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.4.1-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 
@@ -198,6 +205,7 @@ Each layout pack contains:
 - `manifest.json`: schema, TermPDF version, source PDF hash, coordinate system, and file map
 - `pages.jsonl`: one page record per line
 - `blocks.jsonl`: text line and link records
+- `text.txt`: plain reading-order text with `p1.t1<TAB>content` line markers
 - `glyphs.jsonl`: one precise glyph record per visible character
 - `images.jsonl`: image bbox, transform matrix, source pixel dimensions, PNG path, and SHA-256
 - `refs.jsonl`: a global reference registry for quick lookup
@@ -213,6 +221,13 @@ p1.t1        page 1, text line 1
 p1.t1.c1     page 1, text line 1, character 1
 p1.link1     page 1, link 1
 p1.image1    page 1, image 1 (`assets/p1.image1.png`)
+```
+
+`text.txt` is the human- and agent-friendly view of the extracted text. It keeps one physical PDF text line per output line, prefixes it with the stable page/text-line ref, and separates the ref from the content with one tab:
+
+```text
+p1.t1\tSyzSpec: Specification Generation for Linux Kernel Fuzzing via
+p1.t2\tUnder-Constrained Symbolic Execution
 ```
 
 The layout schema is `termpdf.layout.v2`. Bboxes use PDF points with a bottom-left origin, matching PDFium extraction and TermPDF rendering projection. `termpdf grep` also accepts legacy `termpdf.layout.v1` packs.
