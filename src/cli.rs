@@ -102,7 +102,7 @@ enum CliSubcommand {
     #[command(
         long_about = "Extract a stable layout pack for agents and LLMs.\n\n\
             Each layout pack contains manifest.json, JSONL metadata for pages, text, glyphs, \
-            images, and refs, plus processed PNG assets. Stable one-based refs include p1, \
+            images, and refs, plus text.txt and processed PNG assets. Stable one-based refs include p1, \
             p1.t1, p1.t1.c1, p1.link1, and p1.image1.",
         after_help = "Examples:\n  \
             termpdf extract paper.pdf                         Write paper.layout/ next to the PDF\n  \

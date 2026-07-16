@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use termpdf::document::PdfRect;
 use termpdf::pdf::PdfBackend;
@@ -195,6 +196,7 @@ fn bundled_pdfium_lookup_prefers_packaged_library_next_to_binary() {
 
 #[test]
 fn extracts_top_level_and_nested_form_images_as_png() {
+    let _pdfium_guard = pdfium_test_guard();
     let Ok(backend) = PdfBackend::new(None) else {
         eprintln!("skipping PDF image extraction test because PDFium is unavailable");
         return;
@@ -231,6 +233,136 @@ fn extracts_top_level_and_nested_form_images_as_png() {
     }
 }
 
+#[test]
+fn extracts_two_columns_in_column_reading_order() {
+    let _pdfium_guard = pdfium_test_guard();
+    let Ok(backend) = PdfBackend::new(None) else {
+        eprintln!("skipping PDF text extraction test because PDFium is unavailable");
+        return;
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let pdf_path = temp.path().join("two-columns.pdf");
+    write_two_column_pdf(&pdf_path);
+
+    let session = backend.open_session(&pdf_path).unwrap();
+    let page = &session.document().pages[0];
+    let lines = page
+        .lines
+        .iter()
+        .map(|line| line.text())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        lines,
+        [
+            "Shared title",
+            "Left heading",
+            "Left first line remains in the left column.",
+            "Left second line remains in the left column.",
+            "Left third line remains in the left column.",
+            "Right heading",
+            "Right first line remains in the right column.",
+            "Right second line remains in the right column.",
+            "Right third line remains in the right column.",
+        ]
+    );
+    assert!(page.lines.iter().all(line_contains_glyphs));
+}
+
+#[test]
+fn extracts_short_spanning_heading_between_column_regions() {
+    let _pdfium_guard = pdfium_test_guard();
+    let Ok(backend) = PdfBackend::new(None) else {
+        eprintln!("skipping PDF text extraction test because PDFium is unavailable");
+        return;
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let pdf_path = temp.path().join("short-spanning-heading.pdf");
+    write_short_spanning_heading_pdf(&pdf_path);
+
+    let session = backend.open_session(&pdf_path).unwrap();
+    let page = &session.document().pages[0];
+    let lines = page
+        .lines
+        .iter()
+        .map(|line| line.text().trim_end().to_owned())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        lines,
+        [
+            "Left body line one remains in the left column.",
+            "Left body line two remains in the left column.",
+            "Left body line three remains in the left column.",
+            "Right body line one remains in the right column.",
+            "Right body line two remains in the right column.",
+            "Right body line three remains in the right column.",
+            "Short section heading",
+            "Left body line four remains in the left column.",
+            "Left body line five remains in the left column.",
+            "Left body line six remains in the left column.",
+            "Right body line four remains in the right column.",
+            "Right body line five remains in the right column.",
+            "Right body line six remains in the right column.",
+        ]
+    );
+}
+
+fn pdfium_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static PDFIUM_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    PDFIUM_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn write_two_column_pdf(path: &Path) {
+    let content = b"BT /F1 18 Tf 230 750 Td (Shared title) Tj ET\n\
+BT /F1 10 Tf 330 660 Td (Right second line remains in the right column.) Tj ET\n\
+BT /F1 10 Tf 50 680 Td (Left first line remains in the left column.) Tj ET\n\
+BT /F1 12 Tf 330 700 Td (Right heading) Tj ET\n\
+BT /F1 10 Tf 330 680 Td (Right first line remains in the right column.) Tj ET\n\
+BT /F1 10 Tf 330 640 Td (Right third line remains in the right column.) Tj ET\n\
+BT /F1 10 Tf 50 660 Td (Left second line remains in the left column.) Tj ET\n\
+BT /F1 10 Tf 50 640 Td (Left third line remains in the left column.) Tj ET\n\
+BT /F1 12 Tf 50 700 Td (Left heading) Tj ET";
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        pdf_stream(b"<<", content),
+    ];
+
+    write_pdf_objects(path, &objects);
+}
+
+fn write_short_spanning_heading_pdf(path: &Path) {
+    let content =
+        b"BT /F1 10 Tf 330 660 Td (Right body line two remains in the right column.) Tj ET\n\
+BT /F1 10 Tf 50 680 Td (Left body line one remains in the left column.) Tj ET\n\
+BT /F1 10 Tf 330 640 Td (Right body line three remains in the right column.) Tj ET\n\
+BT /F1 10 Tf 50 660 Td (Left body line two remains in the left column.) Tj ET\n\
+BT /F1 14 Tf 265 620 Td (Short section heading) Tj ET\n\
+BT /F1 10 Tf 50 640 Td (Left body line three remains in the left column.) Tj ET\n\
+BT /F1 10 Tf 330 600 Td (Right body line four remains in the right column.) Tj ET\n\
+BT /F1 10 Tf 50 600 Td (Left body line four remains in the left column.) Tj ET\n\
+BT /F1 10 Tf 330 580 Td (Right body line five remains in the right column.) Tj ET\n\
+BT /F1 10 Tf 50 580 Td (Left body line five remains in the left column.) Tj ET\n\
+BT /F1 10 Tf 330 560 Td (Right body line six remains in the right column.) Tj ET\n\
+BT /F1 10 Tf 50 560 Td (Left body line six remains in the left column.) Tj ET\n\
+BT /F1 10 Tf 330 680 Td (Right body line one remains in the right column.) Tj ET";
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        pdf_stream(b"<<", content),
+    ];
+
+    write_pdf_objects(path, &objects);
+}
+
 fn write_nested_image_pdf(path: &Path) {
     let objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
@@ -258,6 +390,10 @@ fn write_nested_image_pdf(path: &Path) {
         ),
     ];
 
+    write_pdf_objects(path, &objects);
+}
+
+fn write_pdf_objects(path: &Path, objects: &[Vec<u8>]) {
     let mut pdf = b"%PDF-1.7\n%\x80\x81\x82\x83\n".to_vec();
     let mut offsets = vec![0];
     for (index, object) in objects.iter().enumerate() {
@@ -302,4 +438,13 @@ fn assert_rect_close(actual: PdfRect, expected: PdfRect) {
         (actual.height - expected.height).abs() < 0.01,
         "height: {actual:?}"
     );
+}
+
+fn line_contains_glyphs(line: &termpdf::document::PdfLine) -> bool {
+    line.glyphs.iter().all(|glyph| {
+        glyph.bbox.x >= line.bbox.x
+            && glyph.bbox.y >= line.bbox.y
+            && glyph.bbox.x + glyph.bbox.width <= line.bbox.x + line.bbox.width
+            && glyph.bbox.y + glyph.bbox.height <= line.bbox.y + line.bbox.height
+    })
 }

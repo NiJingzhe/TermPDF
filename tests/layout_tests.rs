@@ -9,8 +9,8 @@ use termpdf::document::{
 use termpdf::layout::{
     ASSETS_DIR, BLOCKS_FILE, GLYPHS_FILE, IMAGES_FILE, LAYOUT_SCHEMA, LEGACY_LAYOUT_SCHEMA,
     LayoutBlock, LayoutKind, LayoutLinkTarget, LayoutPack, LayoutWriteOptions, MANIFEST_FILE,
-    PAGES_FILE, REFS_FILE, SourceMetadata, default_layout_output_dir, glyph_ref, grep_layout_pack,
-    image_ref, link_ref, page_ref, text_line_ref,
+    PAGES_FILE, REFS_FILE, SourceMetadata, TEXT_FILE, default_layout_output_dir, glyph_ref,
+    grep_layout_pack, image_ref, link_ref, page_ref, text_line_ref,
 };
 
 fn source_metadata() -> SourceMetadata {
@@ -247,6 +247,7 @@ fn writer_outputs_complete_json_pack() {
         MANIFEST_FILE,
         PAGES_FILE,
         BLOCKS_FILE,
+        TEXT_FILE,
         GLYPHS_FILE,
         IMAGES_FILE,
         REFS_FILE,
@@ -258,6 +259,7 @@ fn writer_outputs_complete_json_pack() {
     let manifest: Value = serde_json::from_str(&manifest).unwrap();
     assert_eq!(manifest["schema"], LAYOUT_SCHEMA);
     assert_eq!(manifest["files"]["pages"], PAGES_FILE);
+    assert_eq!(manifest["files"]["text"], TEXT_FILE);
 
     for file_name in [PAGES_FILE, BLOCKS_FILE, GLYPHS_FILE, REFS_FILE] {
         let content = fs::read_to_string(output.join(file_name)).unwrap();
@@ -266,6 +268,29 @@ fn writer_outputs_complete_json_pack() {
             serde_json::from_str::<Value>(line).unwrap();
         }
     }
+
+    assert_eq!(
+        fs::read_to_string(output.join(TEXT_FILE)).unwrap(),
+        "p1.t1\talpha beta\np1.t2\t你好 gamma\n"
+    );
+}
+
+#[test]
+fn plain_text_output_keeps_one_record_per_text_line() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("sample.layout");
+    let document = Document {
+        pages: vec![Page::from_text(0, &["alpha\tbeta\ncontinued  "])],
+    };
+    let pack = LayoutPack::from_document(&document, source_metadata());
+
+    pack.write_to_dir(&output, LayoutWriteOptions::new(false))
+        .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(output.join(TEXT_FILE)).unwrap(),
+        "p1.t1\talpha beta continued\n"
+    );
 }
 
 #[test]
