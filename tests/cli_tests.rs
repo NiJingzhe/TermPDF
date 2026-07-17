@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use termpdf::cli::{ExtractOptions, GrepOptions, TermpdfCommand};
+use termpdf::cli::{
+    CompletionShell, ExtractOptions, GrepOptions, TermpdfCommand, write_shell_completions,
+};
 use termpdf::pdf::PdfBackendOptions;
 
 #[test]
@@ -260,4 +262,38 @@ fn extract_rejects_viewer_only_flags() {
         TermpdfCommand::parse_for_tests(["termpdf", "--dark", "extract", "sample.pdf"], None,)
             .is_err()
     );
+}
+
+#[test]
+fn parses_supported_completion_shells() {
+    assert_eq!(
+        TermpdfCommand::parse_for_tests(["termpdf", "completions", "zsh"], None).unwrap(),
+        TermpdfCommand::Completions(CompletionShell::Zsh)
+    );
+    assert_eq!(
+        TermpdfCommand::parse_for_tests(["termpdf", "completions", "fish"], None).unwrap(),
+        TermpdfCommand::Completions(CompletionShell::Fish)
+    );
+}
+
+#[test]
+fn rejects_unsupported_completion_shells() {
+    assert!(TermpdfCommand::parse_for_tests(["termpdf", "completions", "bash"], None).is_err());
+}
+
+#[test]
+fn generates_zsh_and_fish_completion_scripts() {
+    let mut zsh = Vec::new();
+    write_shell_completions(CompletionShell::Zsh, &mut zsh);
+    let zsh = String::from_utf8(zsh).unwrap();
+    assert!(zsh.contains("#compdef termpdf"));
+    assert!(zsh.contains("completions"));
+    assert!(zsh.contains("--pdfium-lib"));
+
+    let mut fish = Vec::new();
+    write_shell_completions(CompletionShell::Fish, &mut fish);
+    let fish = String::from_utf8(fish).unwrap();
+    assert!(fish.contains("complete -c termpdf"));
+    assert!(fish.contains("completions"));
+    assert!(fish.contains("pdfium-lib"));
 }

@@ -8,6 +8,11 @@ TermPDF 是一个终端 PDF 阅读器，使用 Rust、ratatui、PDFium 和 Kitty
 
 ## 更新日志
 
+### 0.4.2
+
+- 新增 `termpdf completions zsh` 和 `termpdf completions fish`，可将 shell 补全脚本输出到 stdout。
+- 为 PDF 文件、layout 目录、输出目录和 PDFium 库路径新增补全提示。
+
 ### 0.4.1
 
 - 基于整页 glyph 归属和视觉行几何重建 PDF 文本抽取，提高字符完整性、文本行 bbox 准确性和内联标注位置。
@@ -51,6 +56,7 @@ TermPDF 是一个终端 PDF 阅读器，使用 Rust、ratatui、PDFium 和 Kitty
 - Vim 风格 visual 选择，并以纯文本复制到剪贴板
 - 递归抽取 PDF 图片，并输出处理后的 PNG assets
 - 聚焦图片并以 PNG 复制到剪贴板
+- zsh 和 fish shell 补全
 
 ## 安装
 
@@ -75,6 +81,26 @@ brew install termpdf
 brew install NiJingzhe/termpdf/termpdf
 ```
 
+### Shell 补全
+
+使用 `termpdf completions <zsh|fish>` 生成补全脚本。
+
+zsh：
+
+```bash
+mkdir -p ~/.zfunc
+termpdf completions zsh > ~/.zfunc/_termpdf
+```
+
+在 `~/.zshrc` 的 `compinit` 之前添加 `fpath=(~/.zfunc $fpath)`，然后重启 shell。
+
+fish：
+
+```fish
+mkdir -p ~/.config/fish/completions
+termpdf completions fish > ~/.config/fish/completions/termpdf.fish
+```
+
 ## 手动安装
 
 ### 运行时要求
@@ -92,8 +118,8 @@ brew install NiJingzhe/termpdf/termpdf
 从 GitHub Releases 页面下载适合你平台的压缩包，然后解压：
 
 ```bash
-tar -xzf termpdf-0.4.1-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.4.1-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.4.2-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.4.2-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 

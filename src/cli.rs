@@ -1,7 +1,9 @@
 use std::env;
+use std::io::Write;
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum, ValueHint};
+use clap_complete::{generate, shells};
 use color_eyre::eyre::{OptionExt, Result, bail};
 
 use crate::layout::default_layout_output_dir;
@@ -12,6 +14,13 @@ pub enum TermpdfCommand {
     View(PdfBackendOptions),
     Extract(ExtractOptions),
     Grep(GrepOptions),
+    Completions(CompletionShell),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum CompletionShell {
+    Zsh,
+    Fish,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,7 +49,8 @@ pub struct GrepOptions {
         Subcommands:\n  \
         termpdf <file.pdf>              Open the terminal viewer\n  \
         termpdf extract <file.pdf>     Extract a stable layout pack\n  \
-        termpdf grep <pattern> <dir>   Search a layout pack with regex by default\n\n\
+        termpdf grep <pattern> <dir>   Search a layout pack with regex by default\n  \
+        termpdf completions <shell>    Generate zsh or fish shell completions\n\n\
         Run `termpdf <subcommand> --help` for subcommand-specific options.",
     after_help = "Viewer keybindings:\n  \
         h, j, k, l           Move text cursor\n  \
@@ -69,13 +79,18 @@ pub struct GrepOptions {
         termpdf extract paper.pdf --overwrite              Replace an existing layout pack\n  \
         termpdf grep \"method\" paper.layout                 Print matching refs and text\n  \
         termpdf grep \"method|approach\" paper.layout --json  Output JSON results\n  \
-        termpdf grep \"foo.bar\" paper.layout --literal       Treat the pattern as literal text"
+        termpdf grep \"foo.bar\" paper.layout --literal       Treat the pattern as literal text\n  \
+        termpdf completions zsh                             Generate zsh completions"
 )]
 struct CliOptions {
     #[command(subcommand)]
     command: Option<CliSubcommand>,
 
-    #[arg(value_name = "FILE", help = "PDF file to open in the terminal viewer")]
+    #[arg(
+        value_name = "FILE",
+        value_hint = ValueHint::FilePath,
+        help = "PDF file to open in the terminal viewer"
+    )]
     pdf_path: Option<PathBuf>,
 
     #[arg(
@@ -88,6 +103,7 @@ struct CliOptions {
     #[arg(
         long = "pdfium-lib",
         value_name = "PATH",
+        value_hint = ValueHint::AnyPath,
         help = "Path to a PDFium dynamic library or directory"
     )]
     pdfium_lib_path: Option<PathBuf>,
@@ -125,16 +141,31 @@ enum CliSubcommand {
             termpdf grep \"term\" paper.layout --ignore-case            Search case-insensitively"
     )]
     Grep(GrepCliOptions),
+    /// Generate a shell completion script on stdout.
+    #[command(
+        long_about = "Generate a shell completion script on stdout.\n\n\
+            Supported shells are zsh and fish. Redirect the output to the completion directory \
+            used by your shell.",
+        after_help = "Examples:\n  \
+            termpdf completions zsh > ~/.zfunc/_termpdf\n  \
+            termpdf completions fish > ~/.config/fish/completions/termpdf.fish"
+    )]
+    Completions(CompletionsCliOptions),
 }
 
 #[derive(Args, Debug)]
 struct ExtractCliOptions {
-    #[arg(value_name = "FILE", help = "PDF file to extract into a layout pack")]
+    #[arg(
+        value_name = "FILE",
+        value_hint = ValueHint::FilePath,
+        help = "PDF file to extract into a layout pack"
+    )]
     pdf_path: PathBuf,
 
     #[arg(
         long = "out",
         value_name = "DIR",
+        value_hint = ValueHint::DirPath,
         help = "Output layout pack directory"
     )]
     output_dir: Option<PathBuf>,
@@ -145,6 +176,7 @@ struct ExtractCliOptions {
     #[arg(
         long = "pdfium-lib",
         value_name = "PATH",
+        value_hint = ValueHint::AnyPath,
         help = "Path to a PDFium dynamic library or directory"
     )]
     pdfium_lib_path: Option<PathBuf>,
@@ -152,10 +184,18 @@ struct ExtractCliOptions {
 
 #[derive(Args, Debug)]
 struct GrepCliOptions {
-    #[arg(value_name = "PATTERN", help = "Regex pattern to search for")]
+    #[arg(
+        value_name = "PATTERN",
+        value_hint = ValueHint::Other,
+        help = "Regex pattern to search for"
+    )]
     pattern: String,
 
-    #[arg(value_name = "LAYOUT_DIR", help = "TermPDF layout pack directory")]
+    #[arg(
+        value_name = "LAYOUT_DIR",
+        value_hint = ValueHint::DirPath,
+        help = "TermPDF layout pack directory"
+    )]
     layout_dir: PathBuf,
 
     #[arg(short = 'i', long = "ignore-case", help = "Search case-insensitively")]
@@ -172,6 +212,20 @@ struct GrepCliOptions {
 
     #[arg(long = "refs-only", help = "Print only matching refs")]
     refs_only: bool,
+}
+
+#[derive(Args, Debug)]
+struct CompletionsCliOptions {
+    #[arg(value_enum, value_name = "SHELL", help = "Shell to generate for")]
+    shell: CompletionShell,
+}
+
+pub fn write_shell_completions<W: Write>(shell: CompletionShell, writer: &mut W) {
+    let mut command = CliOptions::command();
+    match shell {
+        CompletionShell::Zsh => generate(shells::Zsh, &mut command, "termpdf", writer),
+        CompletionShell::Fish => generate(shells::Fish, &mut command, "termpdf", writer),
+    }
 }
 
 impl TermpdfCommand {
@@ -242,6 +296,16 @@ impl TermpdfCommand {
                     json: grep.json,
                     refs_only: grep.refs_only,
                 }))
+            }
+            Some(CliSubcommand::Completions(completions)) => {
+                if cli.pdf_path.is_some() {
+                    bail!("completions does not accept an extra viewer FILE argument");
+                }
+                if cli.watch_mode || cli.dark_mode || explicit_parent_pdfium_lib_path {
+                    bail!("viewer options are not valid when generating completions");
+                }
+
+                Ok(Self::Completions(completions.shell))
             }
             None => Ok(Self::View(PdfBackendOptions {
                 pdf_path: cli.pdf_path.ok_or_eyre(
