@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use termpdf::app::{App, RunOptions, run};
-use termpdf::cli::{ExtractOptions, GrepOptions, TermpdfCommand};
+use termpdf::cli::{ExtractOptions, GrepOptions, TermpdfCommand, write_shell_completions};
 use termpdf::layout::{
     LayoutGrepOptions, LayoutPack, LayoutWriteOptions, SourceMetadata, grep_layout_pack,
 };
@@ -13,6 +13,10 @@ fn main() -> color_eyre::Result<()> {
         TermpdfCommand::View(options) => run_view(options),
         TermpdfCommand::Extract(options) => run_extract(options),
         TermpdfCommand::Grep(options) => run_grep(options),
+        TermpdfCommand::Completions(shell) => {
+            write_shell_completions(shell, &mut std::io::stdout().lock());
+            Ok(())
+        }
     }
 }
 

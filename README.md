@@ -8,6 +8,11 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 
 ## CHANGELOG
 
+### 0.4.2
+
+- Added `termpdf completions zsh` and `termpdf completions fish` to generate shell completion scripts on stdout.
+- Added completion hints for PDF files, layout directories, output directories, and PDFium library paths.
+
 ### 0.4.1
 
 - Rebuilt PDF text extraction around page-wide glyph ownership and visual line geometry, improving character completeness, line bounding boxes, and inline annotation placement.
@@ -51,6 +56,7 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 - Vim-style visual selection with clipboard copy as plain text
 - Recursive PDF image extraction and processed PNG assets
 - Image focus and PNG clipboard copy
+- zsh and fish shell completions
 
 ## Install
 
@@ -75,6 +81,26 @@ Or install directly:
 brew install NiJingzhe/termpdf/termpdf
 ```
 
+### Shell Completions
+
+Generate a completion script with `termpdf completions <zsh|fish>`.
+
+For zsh:
+
+```bash
+mkdir -p ~/.zfunc
+termpdf completions zsh > ~/.zfunc/_termpdf
+```
+
+Add `fpath=(~/.zfunc $fpath)` before `compinit` in `~/.zshrc`, then restart the shell.
+
+For fish:
+
+```fish
+mkdir -p ~/.config/fish/completions
+termpdf completions fish > ~/.config/fish/completions/termpdf.fish
+```
+
 ## Manual Install
 
 ### Runtime Requirements
@@ -92,8 +118,8 @@ brew install NiJingzhe/termpdf/termpdf
 Download the archive for your platform from the GitHub Releases page, then extract it:
 
 ```bash
-tar -xzf termpdf-0.4.1-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.4.1-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.4.2-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.4.2-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 
