@@ -16,6 +16,7 @@ fn parses_default_view_command() {
             pdfium_lib_path: None,
             dark_mode: false,
             watch_mode: false,
+            kitty_override: None,
         })
     );
 }
@@ -42,7 +43,53 @@ fn parses_view_flags_and_pdfium_library() {
             pdfium_lib_path: Some(PathBuf::from("/opt/pdfium")),
             dark_mode: true,
             watch_mode: true,
+            kitty_override: None,
         })
+    );
+}
+
+#[test]
+fn parses_force_kitty_flag() {
+    let parsed =
+        TermpdfCommand::parse_for_tests(["termpdf", "sample.pdf", "--force-kitty"], None).unwrap();
+
+    assert_eq!(
+        parsed,
+        TermpdfCommand::View(PdfBackendOptions {
+            pdf_path: PathBuf::from("sample.pdf"),
+            pdfium_lib_path: None,
+            dark_mode: false,
+            watch_mode: false,
+            kitty_override: Some(true),
+        })
+    );
+}
+
+#[test]
+fn parses_text_only_flag() {
+    let parsed =
+        TermpdfCommand::parse_for_tests(["termpdf", "sample.pdf", "--text-only"], None).unwrap();
+
+    assert_eq!(
+        parsed,
+        TermpdfCommand::View(PdfBackendOptions {
+            pdf_path: PathBuf::from("sample.pdf"),
+            pdfium_lib_path: None,
+            dark_mode: false,
+            watch_mode: false,
+            kitty_override: Some(false),
+        })
+    );
+}
+
+#[test]
+fn rejects_force_kitty_and_text_only_together() {
+    assert!(
+        TermpdfCommand::parse_for_tests(
+            ["termpdf", "sample.pdf", "--force-kitty", "--text-only"],
+            None,
+        )
+        .is_err()
     );
 }
 
@@ -260,6 +307,17 @@ fn extract_rejects_viewer_only_flags() {
     );
     assert!(
         TermpdfCommand::parse_for_tests(["termpdf", "--dark", "extract", "sample.pdf"], None,)
+            .is_err()
+    );
+    assert!(
+        TermpdfCommand::parse_for_tests(
+            ["termpdf", "--force-kitty", "extract", "sample.pdf"],
+            None,
+        )
+        .is_err()
+    );
+    assert!(
+        TermpdfCommand::parse_for_tests(["termpdf", "--text-only", "extract", "sample.pdf"], None,)
             .is_err()
     );
 }

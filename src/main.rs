@@ -28,7 +28,8 @@ fn run_view(options: PdfBackendOptions) -> color_eyre::Result<()> {
     if options.dark_mode {
         app.handle_key(KeyEvent::from(KeyCode::Char('i')));
     }
-    let run_options = RunOptions::new(options.watch_mode);
+    let run_options =
+        RunOptions::new(options.watch_mode).with_kitty_override(options.kitty_override);
     ratatui::run(|terminal| run(terminal, &mut app, &backend, &mut session, run_options))?;
 
     Ok(())

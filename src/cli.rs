@@ -73,6 +73,8 @@ pub struct GrepOptions {
         termpdf paper.pdf                                  Open paper.pdf in the viewer\n  \
         termpdf paper.pdf --watch                          Reopen the PDF when the file changes\n  \
         termpdf paper.pdf --dark                           Start in dark mode\n  \
+        termpdf paper.pdf --force-kitty                    Render images when this terminal is not auto-detected\n  \
+        termpdf paper.pdf --text-only                      Force text-only output\n  \
         termpdf paper.pdf --pdfium-lib /opt/pdfium         Use a specific PDFium library\n  \
         termpdf extract paper.pdf                          Write paper.layout/ next to the PDF\n  \
         termpdf extract paper.pdf --out out.layout         Write to a custom layout directory\n  \
@@ -110,6 +112,19 @@ struct CliOptions {
 
     #[arg(long = "dark", help = "Start the terminal viewer in dark mode")]
     dark_mode: bool,
+
+    #[arg(
+        long = "force-kitty",
+        conflicts_with = "text_only",
+        help = "Render PDF pages as images even when terminal detection does not recognize this terminal"
+    )]
+    force_kitty: bool,
+
+    #[arg(
+        long = "text-only",
+        help = "Skip image rendering and use text-only output even when the terminal supports graphics"
+    )]
+    text_only: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -255,8 +270,8 @@ impl TermpdfCommand {
                 if cli.watch_mode {
                     bail!("--watch is only valid when opening the terminal viewer");
                 }
-                if cli.dark_mode {
-                    bail!("--dark is only valid when opening the terminal viewer");
+                if cli.dark_mode || cli.force_kitty || cli.text_only {
+                    bail!("--dark, --force-kitty, and --text-only are only valid when opening the terminal viewer");
                 }
 
                 Ok(Self::Extract(ExtractOptions {
@@ -278,8 +293,8 @@ impl TermpdfCommand {
                 if cli.watch_mode {
                     bail!("--watch is only valid when opening the terminal viewer");
                 }
-                if cli.dark_mode {
-                    bail!("--dark is only valid when opening the terminal viewer");
+                if cli.dark_mode || cli.force_kitty || cli.text_only {
+                    bail!("--dark, --force-kitty, and --text-only are only valid when opening the terminal viewer");
                 }
                 if explicit_parent_pdfium_lib_path {
                     bail!("--pdfium-lib is only valid for commands that open a PDF");
@@ -301,7 +316,12 @@ impl TermpdfCommand {
                 if cli.pdf_path.is_some() {
                     bail!("completions does not accept an extra viewer FILE argument");
                 }
-                if cli.watch_mode || cli.dark_mode || explicit_parent_pdfium_lib_path {
+                if cli.watch_mode
+                    || cli.dark_mode
+                    || cli.force_kitty
+                    || cli.text_only
+                    || explicit_parent_pdfium_lib_path
+                {
                     bail!("viewer options are not valid when generating completions");
                 }
 
@@ -314,6 +334,13 @@ impl TermpdfCommand {
                 watch_mode: cli.watch_mode,
                 pdfium_lib_path: parent_pdfium_lib_path.or(env_pdfium_lib_path),
                 dark_mode: cli.dark_mode,
+                kitty_override: if cli.force_kitty {
+                    Some(true)
+                } else if cli.text_only {
+                    Some(false)
+                } else {
+                    None
+                },
             })),
         }
     }

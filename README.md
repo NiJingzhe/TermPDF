@@ -109,7 +109,7 @@ termpdf completions fish > ~/.config/fish/completions/termpdf.fish
   - `aarch64-apple-darwin`
   - `x86_64-unknown-linux-gnu`
   - `aarch64-unknown-linux-gnu`
-- A terminal with kitty graphics protocol support, such as kitty or ghostty
+- A terminal with kitty graphics protocol support; kitty, ghostty, WezTerm, and foot are detected automatically. When detection fails (for example over SSH, where `TERM_PROGRAM` is not forwarded), pass `--force-kitty` to enable image rendering; `--text-only` forces text-only output instead
 - tmux is supported when the outer terminal supports Kitty graphics and `set -g allow-passthrough on` is enabled in `~/.tmux.conf`; TermPDF wraps Kitty image commands in tmux passthrough automatically
 - `termpdf` and the matching packaged `libpdfium` in the same directory, unless you explicitly point to another PDFium build with `PDFIUM_LIB_PATH` or `--pdfium-lib`
 
