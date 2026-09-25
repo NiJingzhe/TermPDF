@@ -708,10 +708,10 @@ fn estimate_cell_pixels(window: WindowSize) -> CellPixels {
         };
     }
 
-    CellPixels {
+    crate::term_pixels::cached_cell_pixels().unwrap_or(CellPixels {
         width: FALLBACK_CELL_WIDTH_PX,
         height: FALLBACK_CELL_HEIGHT_PX,
-    }
+    })
 }
 
 fn fit_page_to_pixels_by_height(page_bbox: PdfRect, target_height: u32) -> (u32, u32) {
