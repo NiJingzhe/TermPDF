@@ -1283,6 +1283,7 @@ impl App {
 
         self.focused_image = None;
         self.move_to(page, 0);
+        self.mode = Mode::Normal;
         self.status = format!("outline: jumped to {}", entry.title);
     }
 

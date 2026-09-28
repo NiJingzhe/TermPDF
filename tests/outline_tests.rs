@@ -165,10 +165,12 @@ fn outline_panel_opens_with_t_and_jumps_to_entry_page() {
 
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.cursor_page(), 2);
-    assert!(app.outline_visible(), "panel stays open after a jump");
-
-    press(&mut app, KeyCode::Char('t'));
+    assert!(
+        !app.outline_visible(),
+        "panel closes after a successful jump"
+    );
     assert_eq!(app.mode(), termpdf::app::Mode::Normal);
+    assert!(app.status().contains("outline: jumped to"));
 }
 
 #[test]
@@ -209,6 +211,10 @@ fn outline_entry_without_page_reports_missing_destination() {
 
     assert!(app.status().contains("no page destination"));
     assert_eq!(app.cursor_page(), 0);
+    assert!(
+        app.outline_visible(),
+        "panel stays open when the entry cannot jump"
+    );
 }
 
 #[test]
