@@ -48,11 +48,20 @@ const JUMP_HISTORY_LIMIT: usize = 100;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RunOptions {
     pub watch_mode: bool,
+    pub kitty_override: Option<bool>,
 }
 
 impl RunOptions {
     pub const fn new(watch_mode: bool) -> Self {
-        Self { watch_mode }
+        Self {
+            watch_mode,
+            kitty_override: None,
+        }
+    }
+
+    pub const fn with_kitty_override(mut self, kitty_override: Option<bool>) -> Self {
+        self.kitty_override = kitty_override;
+        self
     }
 }
 
@@ -299,7 +308,10 @@ pub fn run(
         input_protocol.keyboard_enhancement = true;
     }
 
-    app.kitty_supported = likely_supports_kitty_graphics();
+    app.kitty_supported = options
+        .kitty_override
+        .unwrap_or_else(likely_supports_kitty_graphics);
+    app.status = app.default_status();
 
     let run_result = (|| -> io::Result<()> {
         while !app.should_quit {

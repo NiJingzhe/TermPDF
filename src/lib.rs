@@ -10,4 +10,5 @@ pub mod platform;
 pub mod reference;
 pub mod render;
 pub mod search;
+pub mod term_pixels;
 pub mod ui;

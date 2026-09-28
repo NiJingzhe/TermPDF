@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crossterm::event::{KeyCode, KeyEvent};
 use termpdf::app::{App, RunOptions, run};
 use termpdf::cli::{ExtractOptions, GrepOptions, TermpdfCommand, write_shell_completions};
@@ -32,7 +34,10 @@ fn run_view(options: PdfBackendOptions) -> color_eyre::Result<()> {
     if options.dark_mode {
         app.handle_key(KeyEvent::from(KeyCode::Char('i')));
     }
-    let run_options = RunOptions::new(options.watch_mode);
+    // Terminals that leave TIOCGWINSZ pixel fields empty still answer escape queries.
+    let _ = termpdf::term_pixels::prime_cell_pixels(Duration::from_millis(150));
+    let run_options =
+        RunOptions::new(options.watch_mode).with_kitty_override(options.kitty_override);
     ratatui::run(|terminal| run(terminal, &mut app, &backend, &mut session, run_options))?;
 
     Ok(())

@@ -1779,6 +1779,7 @@ dependencies = [
  "crossterm",
  "flate2",
  "image",
+ "libc",
  "pdfium-render",
  "ratatui",
  "regex",

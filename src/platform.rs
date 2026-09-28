@@ -75,8 +75,10 @@ pub fn likely_supports_kitty_graphics_for_env(
 
     term.contains("kitty")
         || term.contains("ghostty")
+        || term.contains("wezterm")
+        || term.contains("foot")
         || kitty_window_id.is_some()
-        || matches!(term_program.as_str(), "kitty" | "ghostty")
+        || matches!(term_program.as_str(), "kitty" | "ghostty" | "WezTerm")
         || ghostty_resources_dir.is_some()
         || ghostty_bin_dir.is_some()
 }

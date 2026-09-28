@@ -61,6 +61,41 @@ fn treats_ghostty_env_inside_tmux_as_likely_kitty_graphics_support() {
 }
 
 #[test]
+fn treats_wezterm_term_program_as_likely_supported() {
+    assert!(likely_supports_kitty_graphics_for_env(
+        Some("xterm-256color".to_string()),
+        Some("WezTerm".to_string()),
+        None,
+        None,
+        None,
+    ));
+}
+
+#[test]
+fn treats_wezterm_term_name_as_likely_supported() {
+    assert!(likely_supports_kitty_graphics_for_env(
+        Some("wezterm".to_string()),
+        None,
+        None,
+        None,
+        None,
+    ));
+}
+
+#[test]
+fn treats_foot_term_name_as_likely_supported() {
+    for term in ["foot", "foot-extra"] {
+        assert!(likely_supports_kitty_graphics_for_env(
+            Some(term.to_string()),
+            None,
+            None,
+            None,
+            None,
+        ));
+    }
+}
+
+#[test]
 fn rejects_plain_terminal_as_not_likely_supported() {
     assert!(!likely_supports_kitty_graphics_for_env(
         Some("xterm-256color".to_string()),
