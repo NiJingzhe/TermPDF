@@ -136,6 +136,7 @@ impl Drop for InputProtocolGuard {
 pub enum Mode {
     Normal,
     Command,
+    Outline,
     Search,
     Follow,
     SetMark,
@@ -271,6 +272,7 @@ pub struct App {
     jump_back: Vec<NamedMark>,
     jump_forward: Vec<NamedMark>,
     presentation_page: Option<usize>,
+    outline_cursor: usize,
     text_cursor: Option<TextCursor>,
     visual_anchor: Option<TextCursor>,
     focused_ref: Option<DocumentRef>,
@@ -288,6 +290,7 @@ pub fn run(
 ) -> io::Result<()> {
     let mut renderer_state = RendererState::default();
     let mut needs_redraw = true;
+    let mut outline_open_prev = false;
     let mut watch_state = if options.watch_mode {
         Some(FileWatchState::from_session(session))
     } else {
@@ -320,14 +323,26 @@ pub fn run(
 
                 let overlay_area = viewport_area(completed.area, app.mode() == Mode::Presentation);
                 if app.kitty_supported() {
-                    let image_area = overlay_area;
-                    maybe_render_page_images(
-                        app,
-                        session,
-                        image_area,
-                        &mut renderer_state,
-                        transport,
-                    )?;
+                    let outline_open = app.outline_visible();
+                    if outline_open && !outline_open_prev {
+                        // Drop placed page images so the outline panel renders over a clean screen.
+                        let mut stdout = io::stdout().lock();
+                        for command in renderer_state.clear_commands() {
+                            let command = wrap_command_for_transport(&command, transport);
+                            stdout.write_all(command.as_bytes())?;
+                        }
+                        stdout.flush()?;
+                    }
+                    if !outline_open {
+                        maybe_render_page_images(
+                            app,
+                            session,
+                            overlay_area,
+                            &mut renderer_state,
+                            transport,
+                        )?;
+                    }
+                    outline_open_prev = outline_open;
                 }
 
                 needs_redraw = false;
@@ -671,6 +686,7 @@ impl App {
             jump_back: Vec::new(),
             jump_forward: Vec::new(),
             presentation_page: None,
+            outline_cursor: 0,
             text_cursor: None,
             visual_anchor: None,
             focused_ref: None,
@@ -1130,6 +1146,7 @@ impl App {
         match self.mode {
             Mode::Normal => self.handle_normal_mode(key),
             Mode::Command => self.handle_command_mode(key),
+            Mode::Outline => self.handle_outline_mode(key),
             Mode::Search => self.handle_search_mode(key),
             Mode::Follow => self.handle_follow_mode(key),
             Mode::SetMark => self.handle_mark_mode(key, true),
@@ -1459,6 +1476,7 @@ impl App {
                 self.mode = Mode::JumpMark;
                 self.status = "jump mark: ".to_string();
             }
+            KeyCode::Char('t') => self.toggle_outline(),
             KeyCode::F(5) => self.enter_presentation_mode(),
             _ => {
                 self.count_buffer.clear();
@@ -1885,6 +1903,82 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    pub fn outline_visible(&self) -> bool {
+        self.mode == Mode::Outline
+    }
+
+    pub fn outline_cursor(&self) -> usize {
+        self.outline_cursor
+    }
+
+    pub fn outline_entry_count(&self) -> usize {
+        self.document.flattened_outline().len()
+    }
+
+    fn toggle_outline(&mut self) {
+        if self.mode == Mode::Outline {
+            self.close_outline();
+        } else {
+            self.mode = Mode::Outline;
+            self.clamp_outline_cursor();
+            self.status = self.default_status();
+        }
+    }
+
+    fn close_outline(&mut self) {
+        self.mode = Mode::Normal;
+        self.status = self.default_status();
+    }
+
+    fn clamp_outline_cursor(&mut self) {
+        let last = self.document.flattened_outline().len().saturating_sub(1);
+        self.outline_cursor = self.outline_cursor.min(last);
+    }
+
+    fn handle_outline_mode(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('t') | KeyCode::Char('q') => self.close_outline(),
+            KeyCode::Char('j') | KeyCode::Down => self.move_outline_cursor(1),
+            KeyCode::Char('k') | KeyCode::Up => self.move_outline_cursor(-1),
+            KeyCode::Char('g') | KeyCode::Home => self.move_outline_cursor_to(0),
+            KeyCode::Char('G') | KeyCode::End => {
+                self.move_outline_cursor_to(self.outline_entry_count().saturating_sub(1))
+            }
+            KeyCode::Enter => self.jump_to_outline_entry(),
+            _ => {}
+        }
+    }
+
+    fn move_outline_cursor(&mut self, delta: isize) {
+        let next = isize::try_from(self.outline_cursor)
+            .unwrap_or(isize::MAX)
+            .saturating_add(delta);
+        self.move_outline_cursor_to(next.max(0) as usize);
+    }
+
+    fn move_outline_cursor_to(&mut self, index: usize) {
+        let last = self.document.flattened_outline().len().saturating_sub(1);
+        self.outline_cursor = index.min(last);
+        self.status = self.default_status();
+    }
+
+    fn jump_to_outline_entry(&mut self) {
+        let entries = self.document.flattened_outline();
+        let Some(entry) = entries.get(self.outline_cursor) else {
+            self.status = "no outline entries".to_string();
+            return;
+        };
+        let Some(page) = entry.page else {
+            self.status = "outline entry has no page destination".to_string();
+            return;
+        };
+
+        self.focused_image = None;
+        self.move_to(page, 0);
+        self.mode = Mode::Normal;
+        self.status = format!("outline: jumped to {}", entry.title);
     }
 
     fn handle_follow_mode(&mut self, key: KeyEvent) {

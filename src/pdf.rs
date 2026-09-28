@@ -10,7 +10,7 @@ use pdfium_render::prelude::*;
 use sha2::{Digest, Sha256};
 
 use crate::document::{
-    Document, Glyph, LinkTarget, Page, PageLink, PdfImage, PdfImageAsset, PdfLine,
+    Document, Glyph, LinkTarget, OutlineNode, Page, PageLink, PdfImage, PdfImageAsset, PdfLine,
     PdfMatrix as DocumentPdfMatrix, PdfRect,
 };
 use crate::pdfium_bundle::{
@@ -63,7 +63,7 @@ pub struct PdfBackendOptions {
 #[command(
     name = "termpdf",
     about = "Terminal PDF viewer with kitty image protocol",
-    after_help = "Keybindings:\n  hjkl                Move text cursor\n  HJKL                Pan viewport\n  Ctrl-u / Ctrl-d     Half-page up/down\n  Ctrl-b / Ctrl-f     Full-page back/forward\n  gg / {count}gg / G  Jump to page\n  /, n, N, Esc        Search, navigate, hide highlight\n  f / F               Follow visible links\n  Tab / Shift-Tab     Focus next/previous PDF image\n  y                   Copy focused image as PNG\n  v / V / Ctrl-v / y Select text and copy to clipboard\n  m<char> / `<char>   Set and jump to marks\n  :                   Enter ref and named-mark commands\n  Ctrl-o / Ctrl-i     Jump backward/forward (Alt-i fallback)\n  F5                  Presentation mode\n  = / - / 0           Zoom in / out / reset\n  i                   Toggle dark mode\n  q                   Quit"
+    after_help = "Keybindings:\n  hjkl                Move text cursor\n  HJKL                Pan viewport\n  Ctrl-u / Ctrl-d     Half-page up/down\n  Ctrl-b / Ctrl-f     Full-page back/forward\n  gg / {count}gg / G  Jump to page\n  t                   Toggle the outline panel (Enter jumps and closes)\n  /, n, N, Esc        Search, navigate, hide highlight\n  f / F               Follow visible links\n  Tab / Shift-Tab     Focus next/previous PDF image\n  y                   Copy focused image as PNG\n  v / V / Ctrl-v / y Select text and copy to clipboard\n  m<char> / `<char>   Set and jump to marks\n  :                   Enter ref and named-mark commands\n  Ctrl-o / Ctrl-i     Jump backward/forward (Alt-i fallback)\n  F5                  Presentation mode\n  = / - / 0           Zoom in / out / reset\n  i                   Toggle dark mode\n  q                   Quit"
 )]
 struct CliOptions {
     #[arg(value_name = "FILE")]
@@ -380,7 +380,47 @@ fn extract_document(pdf_document: &PdfDocument<'_>) -> Result<Document> {
         });
     }
 
-    Ok(Document { pages })
+    Ok(Document {
+        pages,
+        outline: extract_outline(pdf_document),
+    })
+}
+
+fn extract_outline(pdf_document: &PdfDocument<'_>) -> Vec<OutlineNode> {
+    fn collect_node(bookmark: &PdfBookmark<'_>) -> OutlineNode {
+        let mut node = OutlineNode::new(
+            bookmark.title().unwrap_or_default(),
+            bookmark_destination_page(bookmark),
+        );
+        for child in bookmark.iter_direct_children() {
+            node.children.push(collect_node(&child));
+        }
+        node
+    }
+
+    let Some(first) = pdf_document.bookmarks().root() else {
+        return Vec::new();
+    };
+
+    let mut nodes = Vec::new();
+    let mut current = Some(first);
+    while let Some(bookmark) = current {
+        nodes.push(collect_node(&bookmark));
+        current = bookmark.next_sibling();
+    }
+    nodes
+}
+
+fn bookmark_destination_page(bookmark: &PdfBookmark<'_>) -> Option<usize> {
+    if let Some(destination) = bookmark.destination() {
+        return destination.page_index().ok().map(|index| index as usize);
+    }
+
+    let action = bookmark.action()?;
+    let local = action.as_local_destination_action()?;
+    let destination = local.destination().ok()?;
+    let page = destination.page_index().ok()?;
+    Some(page as usize)
 }
 
 fn extract_images(page_index: usize, page: &PdfPage<'_>) -> Vec<PdfImage> {

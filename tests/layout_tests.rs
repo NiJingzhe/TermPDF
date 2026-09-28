@@ -43,7 +43,10 @@ fn document_with_links() -> Document {
         },
     ];
 
-    Document { pages: vec![page] }
+    Document {
+        outline: Vec::new(),
+        pages: vec![page],
+    }
 }
 
 fn document_with_image() -> Document {
@@ -63,7 +66,10 @@ fn document_with_image() -> Document {
         page: 0,
         object_path: vec![4, 1],
     });
-    Document { pages: vec![page] }
+    Document {
+        outline: Vec::new(),
+        pages: vec![page],
+    }
 }
 
 fn test_png() -> Vec<u8> {
@@ -218,6 +224,7 @@ fn serialized_schema_uses_external_field_names() {
 #[test]
 fn empty_page_keeps_page_ref_without_blocks_or_glyphs() {
     let document = Document {
+        outline: Vec::new(),
         pages: vec![Page {
             lines: Vec::new(),
             bbox: PdfRect::new(0.0, 0.0, 200.0, 300.0),
@@ -280,6 +287,7 @@ fn plain_text_output_keeps_one_record_per_text_line() {
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("sample.layout");
     let document = Document {
+        outline: Vec::new(),
         pages: vec![Page::from_text(0, &["alpha\tbeta\ncontinued  "])],
     };
     let pack = LayoutPack::from_document(&document, source_metadata());

@@ -325,7 +325,10 @@ fn link_refs_use_the_same_visual_order_as_layout_packs() {
         test_link(30.0, 80.0, "https://top-right.example"),
         test_link(10.0, 80.0, "https://top-left.example"),
     ];
-    let mut app = App::new(Document { pages: vec![page] });
+    let mut app = App::new(Document {
+        pages: vec![page],
+        outline: Vec::new(),
+    });
 
     enter_command(&mut app, "goto p1.link1");
     assert_eq!(
@@ -650,6 +653,7 @@ fn empty_page_uses_a_page_ref() {
             links: Vec::new(),
             images: Vec::new(),
         }],
+        outline: Vec::new(),
     };
     let (mut app, clipboard) = App::with_memory_clipboard_for_tests(document);
 
@@ -890,6 +894,7 @@ fn normal_mode_counted_j_moves_exact_line_count() {
 #[test]
 fn normal_mode_supports_word_and_line_boundary_motions() {
     let mut app = App::new(Document {
+        outline: Vec::new(),
         pages: vec![Page::from_text(0, &["  alpha beta", "gamma delta"])],
     });
     app.handle_key(KeyEvent::from(KeyCode::Char('g')));
@@ -911,6 +916,7 @@ fn normal_mode_supports_word_and_line_boundary_motions() {
 #[test]
 fn normal_mode_counted_w_crosses_lines() {
     let mut app = App::new(Document {
+        outline: Vec::new(),
         pages: vec![Page::from_text(0, &["alpha beta", "gamma delta"])],
     });
     app.handle_key(KeyEvent::from(KeyCode::Char('g')));
@@ -965,6 +971,7 @@ fn visual_mode_y_copies_selected_text_and_exits() {
 #[test]
 fn visual_mode_supports_word_and_line_boundary_motions() {
     let (mut app, _clipboard) = App::with_memory_clipboard_for_tests(Document {
+        outline: Vec::new(),
         pages: vec![Page::from_text(0, &["alpha beta", "gamma delta"])],
     });
     app.handle_key(KeyEvent::from(KeyCode::Char('g')));
@@ -1126,6 +1133,7 @@ fn replacing_document_preserves_current_page_and_intra_page_position() {
 
 fn sample_document_with_pages(page_count: usize, lines_per_page: usize) -> Document {
     Document {
+        outline: Vec::new(),
         pages: (0..page_count)
             .map(|page_index| {
                 let lines = (0..lines_per_page)
@@ -1148,7 +1156,10 @@ fn document_with_images() -> Document {
         test_image(0, 80.0, 100.0, 50.0, 60.0),
     ];
     pages[1].images = vec![test_image(1, 15.0, 25.0, 35.0, 45.0)];
-    Document { pages }
+    Document {
+        outline: Vec::new(),
+        pages,
+    }
 }
 
 fn document_with_reference_targets() -> Document {

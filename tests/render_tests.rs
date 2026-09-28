@@ -236,6 +236,7 @@ fn build_page_render_plan_zoom_is_anchored_to_viewport_center() {
 #[test]
 fn build_document_layout_stacks_pages_vertically() {
     let document = Document {
+        outline: Vec::new(),
         pages: vec![
             Page::from_text(0, &["alpha", "beta"]),
             Page::from_text(1, &["gamma"]),
@@ -262,6 +263,7 @@ fn build_document_layout_stacks_pages_vertically() {
 #[test]
 fn current_page_for_scroll_uses_viewport_center() {
     let document = Document {
+        outline: Vec::new(),
         pages: vec![
             Page::from_text(0, &["alpha", "beta"]),
             Page::from_text(1, &["gamma"]),
@@ -288,6 +290,7 @@ fn current_page_for_scroll_uses_viewport_center() {
 #[test]
 fn build_visible_page_plans_only_returns_pages_with_visible_clipped_region() {
     let document = Document {
+        outline: Vec::new(),
         pages: (0..12)
             .map(|page| Page::from_text(page, &["alpha", "beta"]))
             .collect(),

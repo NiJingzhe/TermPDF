@@ -143,14 +143,58 @@ impl Page {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutlineNode {
+    pub title: String,
+    pub page: Option<usize>,
+    pub children: Vec<OutlineNode>,
+}
+
+impl OutlineNode {
+    pub const fn new(title: String, page: Option<usize>) -> Self {
+        Self {
+            title,
+            page,
+            children: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FlatOutlineEntry {
+    pub depth: usize,
+    pub title: String,
+    pub page: Option<usize>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Document {
     pub pages: Vec<Page>,
+    pub outline: Vec<OutlineNode>,
 }
 
 impl Document {
     pub fn page_count(&self) -> usize {
         self.pages.len()
+    }
+
+    /// Depth-first prefix-order flattening of the outline tree, matching the
+    /// order a table-of-contents panel lists entries in.
+    pub fn flattened_outline(&self) -> Vec<FlatOutlineEntry> {
+        fn walk(nodes: &[OutlineNode], depth: usize, entries: &mut Vec<FlatOutlineEntry>) {
+            for node in nodes {
+                entries.push(FlatOutlineEntry {
+                    depth,
+                    title: node.title.clone(),
+                    page: node.page,
+                });
+                walk(&node.children, depth + 1, entries);
+            }
+        }
+
+        let mut entries = Vec::new();
+        walk(&self.outline, 0, &mut entries);
+        entries
     }
 
     pub fn lines(&self) -> impl Iterator<Item = (usize, usize, &PdfLine)> {

@@ -341,6 +341,7 @@ Each release archive contains:
 - `Ctrl-u` / `Ctrl-d`: half-page up/down
 - `Ctrl-b` / `Ctrl-f`: full-page back/forward
 - `gg`, `{count}gg`, `G`: jump to page
+- `t`: toggle the outline panel (PDF bookmarks); `j` / `k` move, `Enter` jumps to the entry's page and closes the panel
 - `/`, `n`, `N`, `Esc`: search, navigate results, hide highlights
 - `f` / `F`: follow visible links
 - `v`: visual character selection
