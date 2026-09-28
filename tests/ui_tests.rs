@@ -83,3 +83,43 @@ fn normal_viewport_reserves_status_bar() {
 
     assert_eq!(viewport_area(area, false), Rect::new(1, 1, 118, 35));
 }
+
+#[test]
+fn outline_panel_lists_flattened_entries_with_indentation() {
+    use crossterm::event::{KeyCode, KeyEvent};
+    use ratatui::Terminal;
+    use termpdf::app::App;
+    use termpdf::document::{Document, OutlineNode, Page};
+    use termpdf::ui::outline_panel;
+
+    let document = Document {
+        pages: vec![Page::from_text(0, &["body"])],
+        outline: vec![OutlineNode {
+            title: "Chapter One".to_string(),
+            page: Some(0),
+            children: vec![OutlineNode::new("Section 1.1".to_string(), Some(0))],
+        }],
+    };
+    let mut app = App::new(document);
+    app.handle_key(KeyEvent::from(KeyCode::Char('t')));
+
+    let area = Rect::new(0, 0, 40, 8);
+    let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(40, 8)).unwrap();
+    terminal
+        .draw(|frame| frame.render_widget(outline_panel(&app, area), area))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = (0..area.height)
+        .map(|y| {
+            (0..area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(content.contains(" Outline "));
+    assert!(content.contains("Chapter One"));
+    assert!(content.contains("  Section 1.1"));
+}

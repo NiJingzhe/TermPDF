@@ -102,6 +102,7 @@ fn selection_bounds_for_page_matches_returns_all_matches_on_page() {
 #[test]
 fn search_uses_character_indices_not_byte_offsets() {
     let document = termpdf::document::Document {
+        outline: Vec::new(),
         pages: vec![termpdf::document::Page::from_text(
             0,
             &["你好 beta", "beta"],

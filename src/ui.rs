@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as TextLine, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::app::{App, Mode, TextCursor, TextSelectionRange};
 use crate::document::PdfRect;
@@ -17,8 +17,72 @@ pub(crate) fn render(frame: &mut Frame, app: &App) {
             Layout::vertical([Constraint::Min(1), Constraint::Length(3)]).areas(frame.area());
 
         frame.render_widget(document_paragraph(app, body), body);
+        if app.outline_visible() {
+            let panel_area = centered_panel_area(body, 42, 70);
+            frame.render_widget(Clear, panel_area);
+            frame.render_widget(outline_panel(app, panel_area), panel_area);
+        }
         frame.render_widget(status_paragraph(app), status);
     }
+}
+
+fn centered_panel_area(area: Rect, percent_width: u16, percent_height: u16) -> Rect {
+    let width = area.width.saturating_mul(percent_width) / 100;
+    let height = area.height.saturating_mul(percent_height) / 100;
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height.saturating_sub(height) / 2;
+
+    Rect {
+        x,
+        y,
+        width: width.clamp(1, area.width),
+        height: height.clamp(1, area.height),
+    }
+}
+
+pub fn outline_panel(app: &App, area: Rect) -> Paragraph<'static> {
+    let entries = app.document().flattened_outline();
+    if entries.is_empty() {
+        return Paragraph::new(TextLine::from("This document has no outline.")).block(
+            Block::default()
+                .title(" Outline ")
+                .borders(Borders::ALL)
+                .style(Style::default().bg(Color::Rgb(20, 24, 32))),
+        );
+    }
+
+    let cursor = app.outline_cursor().min(entries.len() - 1);
+    let lines = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let indent = "  ".repeat(entry.depth);
+            let label = format!("{}{}", indent, entry.title);
+            let page_suffix = entry
+                .page
+                .map(|page| format!("  p{}", page + 1))
+                .unwrap_or_default();
+
+            let mut style = Style::default();
+            if index == cursor {
+                style = style.fg(Color::White).bg(Color::Blue);
+            } else if entry.page.is_none() {
+                style = style.fg(Color::DarkGray);
+            }
+
+            TextLine::from(Span::styled(format!("{label}{page_suffix}"), style))
+        })
+        .collect::<Vec<_>>();
+
+    let visible_rows = area.height.saturating_sub(2);
+    Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Outline ")
+                .borders(Borders::ALL)
+                .style(Style::default().bg(Color::Rgb(20, 24, 32))),
+        )
+        .scroll((visible_scroll(cursor, visible_rows), 0))
 }
 
 pub fn viewport_area(area: Rect, presentation: bool) -> Rect {
@@ -67,7 +131,9 @@ fn document_paragraph(app: &App, area: Rect) -> Paragraph<'static> {
     let page = &app.document().pages[app.cursor_page()];
     let title = format!("{} | {}", page_label(app), display_path(app.file_path()));
 
-    if app.kitty_supported() {
+    // While the outline panel is open, page images are cleared, so render the
+    // page as text beneath the panel instead of leaving an empty kitty layer.
+    if app.kitty_supported() && !app.outline_visible() {
         if app.mode() == Mode::Presentation {
             return Paragraph::new(String::new());
         }
@@ -172,12 +238,18 @@ fn mode_keybinding_chips(app: &App) -> Vec<Span<'static>> {
             status_chip("Esc", "text", Color::Yellow, Color::Black),
         ],
         Mode::Normal => vec![
+            status_chip("t", "outline", Color::Green, Color::Black),
             status_chip("Tab", "images", Color::Green, Color::Black),
             status_chip("/", "search", Color::Yellow, Color::Black),
             status_chip("f", "links", Color::Cyan, Color::Black),
             status_chip("m", "mark", Color::Magenta, Color::Black),
             status_chip("F5", "present", Color::Blue, Color::White),
             status_chip("q", "quit", Color::Red, Color::White),
+        ],
+        Mode::Outline => vec![
+            status_chip("j/k", "move", Color::Cyan, Color::Black),
+            status_chip("Enter", "jump", Color::Green, Color::Black),
+            status_chip("t/Esc", "close", Color::Yellow, Color::Black),
         ],
         Mode::Visual | Mode::VisualLine | Mode::VisualBlock => {
             vec![status_chip("y", "copy", Color::Green, Color::Black)]
@@ -191,6 +263,7 @@ fn mode_keybinding_chips(app: &App) -> Vec<Span<'static>> {
 fn mode_prefix(mode: Mode) -> Span<'static> {
     match mode {
         Mode::Normal => status_chip("NORMAL", "", Color::Blue, Color::White),
+        Mode::Outline => status_chip("OUTLINE", "", Color::Green, Color::Black),
         Mode::Search => status_chip("SEARCH", "", Color::Yellow, Color::Black),
         Mode::Follow => status_chip("FOLLOW", "", Color::Cyan, Color::Black),
         Mode::SetMark => status_chip("MARK", "", Color::Magenta, Color::Black),
