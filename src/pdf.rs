@@ -238,15 +238,18 @@ fn resolve_pdfium_lib_path(
         packaged_pdfium_library_name(os).map(|name| parent.join(name))
     });
 
-    resolve_pdfium_lib_path_for_tests(
+    // Each candidate must exist: a missing packaged path must not shadow the
+    // bundled cache directory, and a missing bundled path must not shadow
+    // anything either.
+    [
         explicit,
         env_path,
         packaged_lib_path,
-        project_root,
-        os,
-        arch,
-    )
-    .filter(|path| path.exists())
+        bundled_pdfium_path(project_root, os, arch),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|path| path.exists())
 }
 
 fn bundled_pdfium_path(project_root: PathBuf, os: &str, arch: &str) -> Option<PathBuf> {
