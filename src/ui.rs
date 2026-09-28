@@ -243,6 +243,7 @@ fn mode_keybinding_chips(app: &App) -> Vec<Span<'static>> {
             status_chip("/", "search", Color::Yellow, Color::Black),
             status_chip("f", "links", Color::Cyan, Color::Black),
             status_chip("m", "mark", Color::Magenta, Color::Black),
+            status_chip(":", "command", Color::Blue, Color::White),
             status_chip("F5", "present", Color::Blue, Color::White),
             status_chip("q", "quit", Color::Red, Color::White),
         ],
@@ -254,16 +255,21 @@ fn mode_keybinding_chips(app: &App) -> Vec<Span<'static>> {
         Mode::Visual | Mode::VisualLine | Mode::VisualBlock => {
             vec![status_chip("y", "copy", Color::Green, Color::Black)]
         }
-        Mode::Search | Mode::Follow | Mode::SetMark | Mode::JumpMark | Mode::Presentation => {
-            Vec::new()
-        }
+        Mode::Command
+        | Mode::Search
+        | Mode::Follow
+        | Mode::SetMark
+        | Mode::JumpMark
+        | Mode::Presentation => Vec::new(),
     }
 }
 
 fn mode_prefix(mode: Mode) -> Span<'static> {
     match mode {
         Mode::Normal => status_chip("NORMAL", "", Color::Blue, Color::White),
+        Mode::Command => status_chip("COMMAND", "", Color::Magenta, Color::White),
         Mode::Outline => status_chip("OUTLINE", "", Color::Green, Color::Black),
+        Mode::Search => status_chip("SEARCH", "", Color::Yellow, Color::Black),
         Mode::Search => status_chip("SEARCH", "", Color::Yellow, Color::Black),
         Mode::Follow => status_chip("FOLLOW", "", Color::Cyan, Color::Black),
         Mode::SetMark => status_chip("MARK", "", Color::Magenta, Color::Black),

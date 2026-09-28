@@ -1,15 +1,16 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal;
@@ -18,8 +19,10 @@ use ratatui::layout::Rect;
 
 use crate::document::{Document, LinkTarget, PageLink, PdfRect};
 use crate::kitty::{KittyTransport, RendererState, wrap_command_for_transport};
+use crate::marks::{MarkStore, NamedMark, default_marks_path};
 use crate::pdf::{PdfBackend, PdfSession};
 use crate::platform::{kitty_transport, likely_supports_kitty_graphics};
+use crate::reference::DocumentRef;
 use crate::render::{
     CellPixels, DocumentLayout, DocumentLayoutPage, FollowTag, FrameOffsets, PageRenderPlan,
     ViewportOffset, ViewportPixels, build_document_layout, build_page_render_plan,
@@ -40,6 +43,7 @@ const MOUSE_SCROLL_ROWS: u32 = 3;
 const MOUSE_SCROLL_COLUMNS: u32 = 6;
 const MOUSE_ZOOM_STEP_PERCENT: i16 = 10;
 const COALESCED_ZOOM_LIMIT_PERCENT: i16 = 50;
+const JUMP_HISTORY_LIMIT: usize = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RunOptions {
@@ -94,12 +98,44 @@ impl ClipboardBackend {
 #[derive(Clone, Debug)]
 struct FileWatchState {
     path: PathBuf,
-    last_modified: Option<SystemTime>,
+    last_identity: Option<FileMetadataIdentity>,
+    last_sha256: String,
+    last_hash_check: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileMetadataIdentity {
+    modified: SystemTime,
+    size: u64,
+}
+
+struct ReloadedDocument {
+    document: Document,
+    source_sha256: String,
+}
+
+struct InputProtocolGuard {
+    keyboard_enhancement: bool,
+}
+
+impl Drop for InputProtocolGuard {
+    fn drop(&mut self) {
+        if self.keyboard_enhancement {
+            let _ = execute!(
+                io::stdout(),
+                PopKeyboardEnhancementFlags,
+                DisableMouseCapture
+            );
+        } else {
+            let _ = execute!(io::stdout(), DisableMouseCapture);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Normal,
+    Command,
     Outline,
     Search,
     Follow,
@@ -212,6 +248,7 @@ pub struct App {
     viewport_offset: ViewportOffset,
     viewport: Option<ViewportPixels>,
     dark_mode: bool,
+    command_input: String,
     search_input: String,
     matches: Vec<SearchMatch>,
     active_match: Option<usize>,
@@ -227,10 +264,18 @@ pub struct App {
     follow_hints: Vec<FollowHint>,
     follow_cluster_rotations: HashMap<FollowClusterKey, usize>,
     marks: HashMap<char, ViewMark>,
+    named_marks: BTreeMap<String, NamedMark>,
+    mark_store: Option<MarkStore>,
+    marks_path: Option<PathBuf>,
+    marks_document_key: Option<String>,
+    marks_dirty: bool,
+    jump_back: Vec<NamedMark>,
+    jump_forward: Vec<NamedMark>,
     presentation_page: Option<usize>,
     outline_cursor: usize,
     text_cursor: Option<TextCursor>,
     visual_anchor: Option<TextCursor>,
+    focused_ref: Option<DocumentRef>,
     focused_image: Option<(usize, usize)>,
     pending_image_copy: Option<(usize, usize)>,
     clipboard: ClipboardBackend,
@@ -247,85 +292,106 @@ pub fn run(
     let mut needs_redraw = true;
     let mut outline_open_prev = false;
     let mut watch_state = if options.watch_mode {
-        Some(FileWatchState::from_path(session.pdf_path()))
+        Some(FileWatchState::from_session(session))
     } else {
         None
     };
     let transport = kitty_transport();
 
     execute!(io::stdout(), EnableMouseCapture)?;
+    let mut input_protocol = InputProtocolGuard {
+        keyboard_enhancement: false,
+    };
+    let keyboard_enhancement = terminal::supports_keyboard_enhancement().unwrap_or(false);
+    if keyboard_enhancement {
+        execute!(
+            io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+        input_protocol.keyboard_enhancement = true;
+    }
 
     app.kitty_supported = options
         .kitty_override
         .unwrap_or_else(likely_supports_kitty_graphics);
     app.status = app.default_status();
 
-    while !app.should_quit {
-        if needs_redraw {
-            let completed = terminal.draw(|frame| render(frame, app))?;
+    let run_result = (|| -> io::Result<()> {
+        while !app.should_quit {
+            if needs_redraw {
+                let completed = terminal.draw(|frame| render(frame, app))?;
 
-            let overlay_area = viewport_area(completed.area, app.mode() == Mode::Presentation);
-            if app.kitty_supported() {
-                let outline_open = app.outline_visible();
-                if outline_open && !outline_open_prev {
-                    // Drop placed page images so the outline panel renders over a clean screen.
-                    let mut stdout = io::stdout().lock();
-                    for command in renderer_state.clear_commands() {
-                        let command = wrap_command_for_transport(&command, transport);
-                        stdout.write_all(command.as_bytes())?;
+                let overlay_area = viewport_area(completed.area, app.mode() == Mode::Presentation);
+                if app.kitty_supported() {
+                    let outline_open = app.outline_visible();
+                    if outline_open && !outline_open_prev {
+                        // Drop placed page images so the outline panel renders over a clean screen.
+                        let mut stdout = io::stdout().lock();
+                        for command in renderer_state.clear_commands() {
+                            let command = wrap_command_for_transport(&command, transport);
+                            stdout.write_all(command.as_bytes())?;
+                        }
+                        stdout.flush()?;
                     }
-                    stdout.flush()?;
+                    if !outline_open {
+                        maybe_render_page_images(
+                            app,
+                            session,
+                            overlay_area,
+                            &mut renderer_state,
+                            transport,
+                        )?;
+                    }
+                    outline_open_prev = outline_open;
                 }
-                if !outline_open {
-                    maybe_render_page_images(
-                        app,
-                        session,
-                        overlay_area,
-                        &mut renderer_state,
-                        transport,
-                    )?;
-                }
-                outline_open_prev = outline_open;
+
+                needs_redraw = false;
             }
 
-            needs_redraw = false;
-        }
+            if let Some(watch_state) = watch_state.as_mut()
+                && let Some(reloaded) = maybe_reload_document(backend, session, watch_state)?
+            {
+                app.replace_document_preserving_view_position_with_source_sha256(
+                    reloaded.document,
+                    Some(reloaded.source_sha256),
+                );
+                needs_redraw = true;
+                continue;
+            }
 
-        if let Some(watch_state) = watch_state.as_mut()
-            && let Some(document) = maybe_reload_document(backend, session, watch_state)?
-        {
-            app.replace_document_preserving_view_position(document);
-            needs_redraw = true;
-            continue;
-        }
-
-        if options.watch_mode {
-            if event::poll(WATCH_POLL_INTERVAL)? {
+            if options.watch_mode {
+                if event::poll(WATCH_POLL_INTERVAL)? {
+                    let first = event::read()?;
+                    app.handle_events(read_event_batch(first)?);
+                    fulfill_pending_image_copy(app, session);
+                    needs_redraw = true;
+                }
+            } else {
                 let first = event::read()?;
                 app.handle_events(read_event_batch(first)?);
                 fulfill_pending_image_copy(app, session);
                 needs_redraw = true;
             }
-        } else {
-            let first = event::read()?;
-            app.handle_events(read_event_batch(first)?);
-            fulfill_pending_image_copy(app, session);
-            needs_redraw = true;
         }
-    }
+        Ok(())
+    })();
 
-    if app.kitty_supported() {
-        let mut stdout = io::stdout().lock();
-        for command in renderer_state.clear_commands() {
-            let command = wrap_command_for_transport(&command, transport);
-            stdout.write_all(command.as_bytes())?;
+    let cleanup_result = (|| -> io::Result<()> {
+        if app.kitty_supported() {
+            let mut stdout = io::stdout().lock();
+            for command in renderer_state.clear_commands() {
+                let command = wrap_command_for_transport(&command, transport);
+                stdout.write_all(command.as_bytes())?;
+            }
+            stdout.flush()?;
         }
-        stdout.flush()?;
+        Ok(())
+    })();
+
+    match run_result {
+        Err(error) => Err(error),
+        Ok(()) => cleanup_result,
     }
-
-    execute!(io::stdout(), DisableMouseCapture)?;
-
-    Ok(())
 }
 
 fn fulfill_pending_image_copy(app: &mut App, session: &PdfSession) {
@@ -351,20 +417,45 @@ fn maybe_reload_document(
     backend: &PdfBackend,
     session: &mut PdfSession,
     watch_state: &mut FileWatchState,
-) -> io::Result<Option<Document>> {
-    if !watch_state.has_changed()? {
+) -> io::Result<Option<ReloadedDocument>> {
+    if !watch_state.should_hash()? {
         return Ok(None);
     }
 
-    let reloaded = match backend.open_session(&watch_state.path) {
+    let Some(before) = file_metadata_identity(&watch_state.path)? else {
+        return Ok(None);
+    };
+    let bytes = match std::fs::read(&watch_state.path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let Some(after) = file_metadata_identity(&watch_state.path)? else {
+        return Ok(None);
+    };
+    if before != after {
+        return Ok(None);
+    }
+    let source_sha256 = crate::pdf::source_sha256_for_bytes(&bytes);
+    watch_state.last_hash_check = Instant::now();
+    if source_sha256 == watch_state.last_sha256 {
+        watch_state.last_identity = Some(after);
+        return Ok(None);
+    }
+    let reloaded = match backend.open_session_from_bytes(&watch_state.path, bytes) {
         Ok(reloaded) => reloaded,
         Err(_) => return Ok(None),
     };
     let document = reloaded.document().clone();
+    debug_assert_eq!(reloaded.source_sha256(), source_sha256);
     *session = reloaded;
-    watch_state.refresh_timestamp()?;
+    watch_state.last_identity = Some(after);
+    watch_state.last_sha256.clone_from(&source_sha256);
 
-    Ok(Some(document))
+    Ok(Some(ReloadedDocument {
+        document,
+        source_sha256,
+    }))
 }
 
 fn maybe_render_page_images(
@@ -392,6 +483,7 @@ fn maybe_render_page_images(
         stdout.write_all(command.as_bytes())?;
     }
     stdout.flush()?;
+    renderer_state.confirm_commands_written();
 
     Ok(())
 }
@@ -512,8 +604,56 @@ impl App {
         Self::with_optional_path(document, Some(pdf_path))
     }
 
+    pub fn with_path_and_source_sha256(
+        document: Document,
+        pdf_path: PathBuf,
+        source_sha256: String,
+    ) -> Self {
+        Self::with_optional_path_and_marks_path(
+            document,
+            Some(pdf_path),
+            default_marks_path(),
+            Some(source_sha256),
+        )
+    }
+
     fn with_optional_path(document: Document, pdf_path: Option<PathBuf>) -> Self {
+        Self::with_optional_path_and_marks_path(document, pdf_path, default_marks_path(), None)
+    }
+
+    fn with_optional_path_and_marks_path(
+        document: Document,
+        pdf_path: Option<PathBuf>,
+        marks_path: Option<PathBuf>,
+        source_sha256: Option<String>,
+    ) -> Self {
         let index = DocumentIndex::build(&document);
+        let (mark_store, named_marks, marks_document_key, mark_store_error) =
+            match (pdf_path.as_deref(), marks_path.as_ref()) {
+                (Some(pdf_path), Some(marks_path)) => {
+                    let store = match source_sha256.as_ref() {
+                        Some(source_sha256) => Ok(MarkStore::for_document_with_sha256(
+                            pdf_path,
+                            marks_path.clone(),
+                            source_sha256.clone(),
+                        )),
+                        None => MarkStore::for_document(pdf_path, marks_path.clone()),
+                    };
+                    match store {
+                        Ok(mut store) => {
+                            let document_key = Some(store.document_key().to_string());
+                            match store.load() {
+                                Ok(marks) => (Some(store), marks, document_key, None),
+                                Err(error) => {
+                                    (Some(store), BTreeMap::new(), document_key, Some(error))
+                                }
+                            }
+                        }
+                        Err(error) => (None, BTreeMap::new(), None, Some(error)),
+                    }
+                }
+                _ => (None, BTreeMap::new(), None, None),
+            };
         let mut app = Self {
             document,
             index,
@@ -522,6 +662,7 @@ impl App {
             viewport_offset: ViewportOffset::default(),
             viewport: None,
             dark_mode: false,
+            command_input: String::new(),
             search_input: String::new(),
             matches: Vec::new(),
             active_match: None,
@@ -537,21 +678,47 @@ impl App {
             follow_hints: Vec::new(),
             follow_cluster_rotations: HashMap::new(),
             marks: HashMap::new(),
+            named_marks,
+            mark_store,
+            marks_path,
+            marks_document_key,
+            marks_dirty: false,
+            jump_back: Vec::new(),
+            jump_forward: Vec::new(),
             presentation_page: None,
             outline_cursor: 0,
             text_cursor: None,
             visual_anchor: None,
+            focused_ref: None,
             focused_image: None,
             pending_image_copy: None,
             clipboard: ClipboardBackend::System,
         };
-        app.status = app.default_status();
+        app.status = mark_store_error
+            .map(|error| format!("marks unavailable: {error}"))
+            .unwrap_or_else(|| app.default_status());
         app
     }
 
     pub fn with_memory_clipboard_for_tests(document: Document) -> (Self, ClipboardCapture) {
         let (clipboard, capture) = ClipboardBackend::memory();
         let mut app = Self::with_optional_path(document, None);
+        app.clipboard = clipboard;
+        (app, capture)
+    }
+
+    pub fn with_path_and_memory_clipboard_for_tests(
+        document: Document,
+        pdf_path: PathBuf,
+        marks_path: PathBuf,
+    ) -> (Self, ClipboardCapture) {
+        let (clipboard, capture) = ClipboardBackend::memory();
+        let mut app = Self::with_optional_path_and_marks_path(
+            document,
+            Some(pdf_path),
+            Some(marks_path),
+            None,
+        );
         app.clipboard = clipboard;
         (app, capture)
     }
@@ -565,6 +732,14 @@ impl App {
     }
 
     pub fn replace_document_preserving_view_position(&mut self, document: Document) {
+        self.replace_document_preserving_view_position_with_source_sha256(document, None);
+    }
+
+    fn replace_document_preserving_view_position_with_source_sha256(
+        &mut self,
+        document: Document,
+        source_sha256: Option<String>,
+    ) {
         let viewport = self.viewport();
         let old_layout = self.document_layout_for(viewport);
         let old_center_x = self.viewport_offset.x.saturating_add(viewport.width / 2);
@@ -585,8 +760,75 @@ impl App {
 
         self.document = document;
         self.index = DocumentIndex::build(&self.document);
+        let mut document_changed = true;
+        let mark_reload_error = if let (Some(pdf_path), Some(marks_path)) =
+            (self.pdf_path.as_deref(), self.marks_path.as_ref())
+        {
+            let reopened = match source_sha256 {
+                Some(source_sha256) => Ok(MarkStore::for_document_with_sha256(
+                    pdf_path,
+                    marks_path.clone(),
+                    source_sha256,
+                )),
+                None => MarkStore::for_document(pdf_path, marks_path.clone()),
+            };
+            match reopened {
+                Ok(mut reopened) => {
+                    let same_document =
+                        self.marks_document_key.as_deref() == Some(reopened.document_key());
+                    document_changed = !same_document;
+                    self.marks_document_key = Some(reopened.document_key().to_string());
+                    match reopened.load() {
+                        Ok(marks) => {
+                            if !same_document {
+                                self.jump_back.clear();
+                                self.jump_forward.clear();
+                                self.named_marks = marks;
+                                self.marks_dirty = false;
+                            } else if !self.marks_dirty {
+                                self.named_marks = marks;
+                            }
+                            if !same_document || !self.marks_dirty {
+                                self.mark_store = Some(reopened);
+                            }
+                            None
+                        }
+                        Err(error) => {
+                            if !same_document {
+                                self.mark_store = Some(reopened);
+                                self.named_marks.clear();
+                                self.marks_dirty = false;
+                                self.jump_back.clear();
+                                self.jump_forward.clear();
+                            }
+                            Some(error)
+                        }
+                    }
+                }
+                Err(error) => {
+                    self.mark_store = None;
+                    self.marks_document_key = None;
+                    self.named_marks.clear();
+                    self.marks_dirty = false;
+                    self.jump_back.clear();
+                    self.jump_forward.clear();
+                    Some(error)
+                }
+            }
+        } else {
+            self.named_marks.clear();
+            self.marks_document_key = None;
+            self.marks_dirty = false;
+            self.jump_back.clear();
+            self.jump_forward.clear();
+            None
+        };
+        self.focused_ref = None;
         self.focused_image = None;
         self.pending_image_copy = None;
+        if document_changed {
+            self.marks.clear();
+        }
         self.matches = self.index.search(&self.search_input);
         self.active_match = self
             .active_match
@@ -632,6 +874,8 @@ impl App {
             self.mode = Mode::Normal;
             self.visual_anchor = None;
             self.text_cursor = None;
+        } else if document_changed {
+            self.text_cursor = None;
         } else {
             self.text_cursor = self
                 .text_cursor
@@ -639,7 +883,9 @@ impl App {
         }
 
         self.bump_render_nonce();
-        self.status = self.default_status();
+        self.status = mark_reload_error
+            .map(|error| format!("document reloaded; marks unavailable: {error}"))
+            .unwrap_or_else(|| self.default_status());
     }
 
     pub fn cursor_page(&self) -> usize {
@@ -648,6 +894,9 @@ impl App {
         }
         if let Some((page_index, _)) = self.focused_image {
             return page_index;
+        }
+        if let Some(reference) = self.focused_ref {
+            return reference.page_index();
         }
         if let Some(cursor) = self.text_cursor {
             return self.clamp_text_cursor(cursor).page;
@@ -788,6 +1037,31 @@ impl App {
             return None;
         }
 
+        if let Some(reference) = self.focused_ref {
+            if reference.page_index() != page {
+                return None;
+            }
+            return match reference {
+                DocumentRef::Page { .. } => None,
+                DocumentRef::TextLine { line, .. } => self.document.pages[page]
+                    .lines
+                    .get(line)
+                    .map(|line| line.bbox),
+                DocumentRef::Glyph { line, glyph, .. } => self.document.pages[page]
+                    .lines
+                    .get(line)
+                    .and_then(|line| line.glyphs.get(glyph))
+                    .map(|glyph| glyph.bbox),
+                DocumentRef::Link { link, .. } => {
+                    self.link_for_ref(page, link).map(|(_, link)| link.bbox)
+                }
+                DocumentRef::Image { image, .. } => self.document.pages[page]
+                    .images
+                    .get(image)
+                    .map(|image| image.bbox),
+            };
+        }
+
         if self.mode == Mode::Normal
             && let Some((image_page, image_index)) = self.focused_image
         {
@@ -871,6 +1145,7 @@ impl App {
 
         match self.mode {
             Mode::Normal => self.handle_normal_mode(key),
+            Mode::Command => self.handle_command_mode(key),
             Mode::Outline => self.handle_outline_mode(key),
             Mode::Search => self.handle_search_mode(key),
             Mode::Follow => self.handle_follow_mode(key),
@@ -1128,6 +1403,25 @@ impl App {
             KeyCode::Esc if self.focused_image.is_some() => self.clear_image_focus(),
             KeyCode::Esc => self.clear_search_highlight_and_reset(),
             KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char(':') => {
+                self.count_buffer.clear();
+                self.pending_g = false;
+                self.mode = Mode::Command;
+                self.command_input.clear();
+                self.status = ":".to_string();
+            }
+            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.count_buffer.clear();
+                self.jump_history_back()
+            }
+            KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.count_buffer.clear();
+                self.jump_history_forward()
+            }
+            KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.count_buffer.clear();
+                self.jump_history_forward()
+            }
             KeyCode::Tab => self.cycle_image_focus(1),
             KeyCode::BackTab => self.cycle_image_focus(-1),
             KeyCode::Char('y') if self.focused_image.is_some() => self.request_image_copy(),
@@ -1189,6 +1483,406 @@ impl App {
                 self.status = self.default_status();
             }
         }
+    }
+
+    fn handle_command_mode(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                self.command_input.clear();
+                self.count_buffer.clear();
+                self.pending_g = false;
+                self.status = self.default_status();
+            }
+            KeyCode::Enter => self.submit_command(),
+            KeyCode::Backspace => {
+                self.command_input.pop();
+                self.status = format!(":{}", self.command_input);
+            }
+            KeyCode::Char(ch)
+                if !ch.is_control()
+                    && !key.modifiers.intersects(
+                        KeyModifiers::CONTROL
+                            | KeyModifiers::ALT
+                            | KeyModifiers::SUPER
+                            | KeyModifiers::HYPER
+                            | KeyModifiers::META,
+                    ) =>
+            {
+                self.command_input.push(ch);
+                self.status = format!(":{}", self.command_input);
+            }
+            _ => {}
+        }
+    }
+
+    fn submit_command(&mut self) {
+        let input = self.command_input.trim().to_string();
+        self.command_input.clear();
+        self.count_buffer.clear();
+        self.pending_g = false;
+        self.mode = Mode::Normal;
+        let (command, argument) = input
+            .split_once(char::is_whitespace)
+            .map(|(command, argument)| (command, argument.trim()))
+            .unwrap_or((input.as_str(), ""));
+
+        match command {
+            "goto" => self.command_goto(argument),
+            "ref" if argument.is_empty() => {
+                self.status = format!("current ref: {}", self.current_ref())
+            }
+            "ref" => self.command_goto(argument),
+            "copy-ref" if argument.is_empty() => self.copy_current_ref(),
+            "copy-ref" => self.status = "usage: :copy-ref".to_string(),
+            "mark" => self.set_named_mark(argument),
+            "jump" => self.jump_to_named_mark(argument),
+            "marks" if argument.is_empty() => self.list_named_marks(),
+            "marks" => self.status = "usage: :marks".to_string(),
+            "delmark" => self.delete_named_mark(argument),
+            "" => self.status = self.default_status(),
+            _ => self.status = format!("unknown command: {command}"),
+        }
+    }
+
+    fn command_goto(&mut self, input: &str) {
+        if input.is_empty() {
+            self.status = "usage: :goto <ref>".to_string();
+            return;
+        }
+        match input.parse::<DocumentRef>() {
+            Ok(reference) => match self.navigate_to_ref(reference, true) {
+                Ok(()) => self.status = format!("jumped to {reference}"),
+                Err(error) => self.status = error,
+            },
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    fn copy_current_ref(&mut self) {
+        let reference = self.current_ref().to_string();
+        self.status = match self.clipboard.copy(&reference) {
+            Ok(()) => format!("copied ref {reference}"),
+            Err(error) => format!("copy ref failed: {error}"),
+        };
+    }
+
+    fn set_named_mark(&mut self, name: &str) {
+        if let Err(error) = validate_mark_name(name) {
+            self.status = error;
+            return;
+        }
+        let mark = self.current_navigation_mark();
+        self.named_marks.insert(name.to_string(), mark);
+        self.marks_dirty = true;
+        if self.pdf_path.is_none() || self.marks_path.is_none() {
+            self.status = format!("mark '{name}' set for this session");
+            return;
+        }
+        self.status = match self.persist_named_marks() {
+            Ok(()) => {
+                self.marks_dirty = false;
+                format!("mark '{name}' set at {}", self.current_ref())
+            }
+            Err(error) => format!("mark '{name}' set for this session; save failed: {error}"),
+        };
+    }
+
+    fn jump_to_named_mark(&mut self, name: &str) {
+        if let Err(error) = validate_mark_name(name) {
+            self.status = error;
+            return;
+        }
+        let Some(mark) = self.named_marks.get(name).cloned() else {
+            self.status = format!("mark '{name}' not set");
+            return;
+        };
+        self.jump_to_navigation_mark(&mark, true);
+        self.status = format!("jumped to mark '{name}'");
+    }
+
+    fn list_named_marks(&mut self) {
+        if self.named_marks.is_empty() {
+            self.status = "no named marks".to_string();
+            return;
+        }
+        self.status = format!(
+            "marks: {}",
+            self.named_marks
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    fn delete_named_mark(&mut self, name: &str) {
+        if let Err(error) = validate_mark_name(name) {
+            self.status = error;
+            return;
+        }
+        if self.named_marks.remove(name).is_none() {
+            self.status = format!("mark '{name}' not set");
+            return;
+        }
+        self.marks_dirty = true;
+        if self.pdf_path.is_none() || self.marks_path.is_none() {
+            self.status = format!("mark '{name}' deleted for this session");
+            return;
+        }
+        self.status = match self.persist_named_marks() {
+            Ok(()) => {
+                self.marks_dirty = false;
+                format!("mark '{name}' deleted")
+            }
+            Err(error) => format!("mark '{name}' deleted for this session; save failed: {error}"),
+        };
+    }
+
+    fn persist_named_marks(&mut self) -> io::Result<()> {
+        if self.mark_store.is_none()
+            && let (Some(pdf_path), Some(marks_path)) =
+                (self.pdf_path.as_deref(), self.marks_path.as_ref())
+        {
+            let (store, _) = MarkStore::open(pdf_path, marks_path.clone())?;
+            self.marks_document_key = Some(store.document_key().to_string());
+            self.mark_store = Some(store);
+        }
+        let Some(store) = &mut self.mark_store else {
+            return Ok(());
+        };
+        self.named_marks = store.save(&self.named_marks)?;
+        Ok(())
+    }
+
+    fn current_ref(&self) -> DocumentRef {
+        if let Some(reference) = self.focused_ref {
+            return reference;
+        }
+        if let Some((page, image)) = self.focused_image {
+            return DocumentRef::Image { page, image };
+        }
+
+        let cursor = self.current_text_cursor();
+        if self
+            .document
+            .pages
+            .get(cursor.page)
+            .is_none_or(|page| page.lines.is_empty())
+        {
+            return DocumentRef::Page { page: cursor.page };
+        }
+        if self.line_glyph_count(cursor.page, cursor.line) == 0 {
+            DocumentRef::TextLine {
+                page: cursor.page,
+                line: cursor.line,
+            }
+        } else {
+            DocumentRef::Glyph {
+                page: cursor.page,
+                line: cursor.line,
+                glyph: cursor.glyph,
+            }
+        }
+    }
+
+    fn navigate_to_ref(
+        &mut self,
+        reference: DocumentRef,
+        record_history: bool,
+    ) -> Result<(), String> {
+        let page_index = reference.page_index();
+        let Some(page) = self.document.pages.get(page_index) else {
+            return Err(format!("ref {reference} points outside this document"));
+        };
+
+        match reference {
+            DocumentRef::Page { .. } => {}
+            DocumentRef::TextLine { line, .. } => {
+                if line >= page.lines.len() {
+                    return Err(format!("ref {reference} points to a missing text line"));
+                }
+            }
+            DocumentRef::Glyph { line, glyph, .. } => {
+                if line >= page.lines.len() {
+                    return Err(format!("ref {reference} points to a missing text line"));
+                }
+                if glyph >= page.lines[line].glyphs.len() {
+                    return Err(format!("ref {reference} points to a missing glyph"));
+                }
+            }
+            DocumentRef::Link { link, .. } => {
+                if self.link_for_ref(page_index, link).is_none() {
+                    return Err(format!("ref {reference} points to a missing link"));
+                }
+            }
+            DocumentRef::Image { image, .. } => {
+                if image >= page.images.len() {
+                    return Err(format!("ref {reference} points to a missing image"));
+                }
+            }
+        }
+
+        let jump_origin = record_history.then(|| self.current_navigation_mark());
+        let target_zoom = self.zoom_percent;
+        self.presentation_page = None;
+        self.focused_ref = Some(reference);
+        self.focused_image = None;
+        self.pending_image_copy = None;
+
+        match reference {
+            DocumentRef::Page { page } => {
+                self.move_to(page, 0);
+                self.focused_ref = Some(reference);
+            }
+            DocumentRef::TextLine { page, line } => {
+                let cursor = self.clamp_text_cursor(TextCursor {
+                    page,
+                    line,
+                    glyph: 0,
+                });
+                self.text_cursor = Some(cursor);
+                self.focus_text_cursor(cursor);
+                self.focused_ref = Some(reference);
+            }
+            DocumentRef::Glyph { page, line, glyph } => {
+                let cursor = TextCursor { page, line, glyph };
+                self.text_cursor = Some(cursor);
+                self.focus_text_cursor(cursor);
+                self.focused_ref = Some(reference);
+            }
+            DocumentRef::Link { page, link } => {
+                let bbox = self
+                    .link_for_ref(page, link)
+                    .map(|(_, link)| link.bbox)
+                    .expect("link ref was validated");
+                self.text_cursor = None;
+                self.focus_bbox(page, bbox);
+                self.focused_ref = Some(reference);
+            }
+            DocumentRef::Image { page, image } => {
+                self.text_cursor = None;
+                self.focused_image = Some((page, image));
+                self.focus_bbox(page, self.document.pages[page].images[image].bbox);
+                self.focused_ref = Some(reference);
+            }
+        }
+        self.zoom_percent = target_zoom;
+        self.bump_render_nonce();
+        if let Some(origin) = jump_origin {
+            self.record_completed_jump(origin);
+        }
+        Ok(())
+    }
+
+    fn link_for_ref(&self, page: usize, link: usize) -> Option<(usize, &PageLink)> {
+        self.document
+            .pages
+            .get(page)?
+            .links_in_reading_order()
+            .into_iter()
+            .nth(link)
+    }
+
+    fn current_navigation_mark(&self) -> NamedMark {
+        let page_index = self
+            .current_ref()
+            .page_index()
+            .min(self.document.page_count().saturating_sub(1));
+        let viewport = self.viewport();
+        let layout = self.document_layout_for(viewport);
+        let (relative_x, relative_y) = layout
+            .pages
+            .get(page_index)
+            .map(|page_layout| {
+                let center_x = self.viewport_offset.x.saturating_add(viewport.width / 2);
+                let center_y = self.viewport_offset.y.saturating_add(viewport.height / 2);
+                let page_left = page_left_px(viewport.width, page_layout.bitmap_width);
+                (
+                    relative_position(center_x, page_left, page_layout.bitmap_width)
+                        .clamp(0.0, 1.0),
+                    relative_position(center_y, page_layout.doc_y, page_layout.bitmap_height)
+                        .clamp(0.0, 1.0),
+                )
+            })
+            .unwrap_or((0.5, 0.5));
+
+        NamedMark {
+            ref_id: self.current_ref().to_string(),
+            page_index,
+            relative_x,
+            relative_y,
+            zoom_percent: self.zoom_percent,
+        }
+    }
+
+    fn jump_to_navigation_mark(&mut self, mark: &NamedMark, record_history: bool) {
+        let jump_origin = record_history.then(|| self.current_navigation_mark());
+        self.zoom_percent = mark.zoom_percent.clamp(25, 400);
+        let resolved_ref = mark
+            .ref_id
+            .parse::<DocumentRef>()
+            .ok()
+            .filter(|reference| self.navigate_to_ref(*reference, false).is_ok());
+        if resolved_ref.is_none() {
+            self.presentation_page = None;
+            self.focused_ref = None;
+            self.focused_image = None;
+            self.pending_image_copy = None;
+            self.text_cursor = None;
+        }
+
+        let viewport = self.viewport();
+        let layout = self.document_layout_for(viewport);
+        let page_index = mark
+            .page_index
+            .min(self.document.page_count().saturating_sub(1));
+        if let Some(page_layout) = layout.pages.get(page_index) {
+            let page_left = page_left_px(viewport.width, page_layout.bitmap_width);
+            let center_x = page_left.saturating_add(
+                (mark.relative_x.clamp(0.0, 1.0) * page_layout.bitmap_width as f32).round() as u32,
+            );
+            let center_y = page_layout.doc_y.saturating_add(
+                (mark.relative_y.clamp(0.0, 1.0) * page_layout.bitmap_height as f32).round() as u32,
+            );
+            self.viewport_offset.x = center_x.saturating_sub(viewport.width / 2);
+            self.viewport_offset.y = center_y.saturating_sub(viewport.height / 2);
+        }
+        self.clamp_viewport_offset_with(&layout, viewport);
+        self.bump_render_nonce();
+        if let Some(origin) = jump_origin {
+            self.record_completed_jump(origin);
+        }
+    }
+
+    fn record_completed_jump(&mut self, origin: NamedMark) {
+        if origin == self.current_navigation_mark() {
+            return;
+        }
+        push_jump_history(&mut self.jump_back, origin);
+        self.jump_forward.clear();
+    }
+
+    fn jump_history_back(&mut self) {
+        let current = self.current_navigation_mark();
+        let Some(target) = pop_distinct_jump(&mut self.jump_back, &current) else {
+            self.status = "jump history is empty".to_string();
+            return;
+        };
+        push_jump_history(&mut self.jump_forward, current);
+        self.jump_to_navigation_mark(&target, false);
+        self.status = format!("jumped back to {}", target.ref_id);
+    }
+
+    fn jump_history_forward(&mut self) {
+        let current = self.current_navigation_mark();
+        let Some(target) = pop_distinct_jump(&mut self.jump_forward, &current) else {
+            self.status = "forward jump history is empty".to_string();
+            return;
+        };
+        push_jump_history(&mut self.jump_back, current);
+        self.jump_to_navigation_mark(&target, false);
+        self.status = format!("jumped forward to {}", target.ref_id);
     }
 
     fn handle_search_mode(&mut self, key: KeyEvent) {
@@ -1316,6 +2010,8 @@ impl App {
     fn enter_visual_mode(&mut self, mode: Mode) {
         self.focused_image = None;
         let cursor = self.current_text_cursor();
+        self.focused_ref = None;
+        self.pending_image_copy = None;
         self.mode = mode;
         self.text_cursor = Some(cursor);
         self.visual_anchor = Some(cursor);
@@ -1472,6 +2168,7 @@ impl App {
 
     fn set_text_cursor(&mut self, cursor: TextCursor) {
         let cursor = self.clamp_text_cursor(cursor);
+        self.focused_ref = None;
         self.focused_image = None;
         self.pending_image_copy = None;
         self.text_cursor = Some(cursor);
@@ -1811,6 +2508,7 @@ impl App {
 
     fn cycle_image_focus(&mut self, direction: isize) {
         self.count_buffer.clear();
+        self.focused_ref = None;
         let current_page = self.cursor_page();
         let targets = self
             .document
@@ -1860,6 +2558,7 @@ impl App {
     }
 
     fn clear_image_focus(&mut self) {
+        self.focused_ref = None;
         self.focused_image = None;
         self.pending_image_copy = None;
         self.status = self.default_status();
@@ -2078,12 +2777,17 @@ impl App {
                     );
                     self.status = format!("mark '{ch}' set");
                 } else if let Some(mark) = self.marks.get(&ch).copied() {
+                    let origin = self.current_navigation_mark();
+                    self.focused_ref = None;
+                    self.focused_image = None;
+                    self.text_cursor = None;
                     self.zoom_percent = mark.zoom_percent;
                     self.viewport_offset = mark.viewport_offset;
                     let viewport = self.viewport();
                     let layout = self.document_layout_for(viewport);
                     self.clamp_viewport_offset_with(&layout, viewport);
                     self.bump_render_nonce();
+                    self.record_completed_jump(origin);
                     self.status = format!("jumped to mark '{ch}'");
                 } else {
                     self.status = format!("mark '{ch}' not set");
@@ -2171,6 +2875,7 @@ impl App {
         self.follow_hints.clear();
         self.follow_cluster_rotations.clear();
         self.visual_anchor = None;
+        self.focused_ref = None;
         self.text_cursor = None;
         self.pending_g = false;
         self.count_buffer.clear();
@@ -2180,8 +2885,10 @@ impl App {
 
     fn jump_to_match(&mut self, match_index: usize) {
         if let Some(search_match) = self.matches.get(match_index).cloned() {
+            let origin = self.current_navigation_mark();
             self.move_to(search_match.page, search_match.line);
             self.recenter_viewport_on_match(&search_match);
+            self.record_completed_jump(origin);
         }
     }
 
@@ -2242,7 +2949,9 @@ impl App {
                 self.take_count_or_one().saturating_sub(1) as usize
             };
             self.pending_g = false;
+            let origin = self.current_navigation_mark();
             self.move_to(page, 0);
+            self.record_completed_jump(origin);
             return;
         }
 
@@ -2257,10 +2966,13 @@ impl App {
     fn move_to_last_page(&mut self) {
         self.count_buffer.clear();
         let last_page = self.document.page_count().saturating_sub(1);
+        let origin = self.current_navigation_mark();
         self.move_to(last_page, 0);
+        self.record_completed_jump(origin);
     }
 
     fn move_to(&mut self, page: usize, line: usize) {
+        self.focused_ref = None;
         self.focused_image = None;
         self.pending_image_copy = None;
         let viewport = self.viewport();
@@ -2295,6 +3007,7 @@ impl App {
     }
 
     fn adjust_zoom(&mut self, delta_percent: i16) {
+        self.focused_ref = None;
         let viewport = self.viewport();
         let old_layout = self.document_layout_for(viewport);
         let current_page = self
@@ -2338,6 +3051,7 @@ impl App {
     }
 
     fn adjust_zoom_at_mouse(&mut self, mouse: MouseEvent, delta_percent: i16) {
+        self.focused_ref = None;
         let viewport = self.viewport();
         let old_layout = self.document_layout_for(viewport);
         let mouse_x = mouse
@@ -2395,6 +3109,7 @@ impl App {
     }
 
     fn reset_zoom(&mut self) {
+        self.focused_ref = None;
         self.zoom_percent = 100;
         self.viewport_offset = ViewportOffset::default();
         self.text_cursor = None;
@@ -2413,6 +3128,7 @@ impl App {
             return;
         }
 
+        self.focused_ref = None;
         let viewport = self.viewport();
         let layout = self.document_layout_for(viewport);
         self.viewport_offset.x = offset_with_delta(
@@ -2431,6 +3147,7 @@ impl App {
             return;
         }
 
+        self.focused_ref = None;
         let viewport = self.viewport();
         let layout = self.document_layout_for(viewport);
         self.viewport_offset.y = offset_with_delta(
@@ -2585,7 +3302,9 @@ impl App {
 
         match link.target {
             LinkTarget::LocalDestination { page, x, y, .. } => {
+                let origin = self.current_navigation_mark();
                 self.jump_to_link_destination(page, x, y);
+                self.record_completed_jump(origin);
                 self.status = self.default_status();
             }
             LinkTarget::ExternalUri(uri) => {
@@ -2599,6 +3318,9 @@ impl App {
     }
 
     fn jump_to_link_destination(&mut self, page_index: usize, x: Option<f32>, y: Option<f32>) {
+        self.focused_ref = None;
+        self.focused_image = None;
+        self.text_cursor = None;
         let viewport = self.viewport();
         let layout = self.document_layout_for(viewport);
         let Some(page_layout) = layout.pages.get(page_index).copied() else {
@@ -2743,7 +3465,8 @@ impl App {
     fn default_status(&self) -> String {
         if let Some(page_index) = self.presentation_page {
             return format!(
-                "page {}/{} | zoom {}% | presentation | click/Space next | Backspace prev | F5/Esc exit",
+                "p{} | page {}/{} | zoom {}% | presentation | click/Space next | Backspace prev | F5/Esc exit",
+                page_index + 1,
                 page_index + 1,
                 self.document.page_count(),
                 self.zoom_percent,
@@ -2755,7 +3478,9 @@ impl App {
             && let Some(image) = page.images.get(image_index)
         {
             return format!(
-                "image {}/{} on page {} | {}x{} px",
+                "p{}.image{} | image {}/{} on page {} | {}x{} px",
+                page_index + 1,
+                image_index + 1,
                 image_index + 1,
                 page.images.len(),
                 page_index + 1,
@@ -2766,7 +3491,8 @@ impl App {
 
         let page = self.cursor_page();
         format!(
-            "line {}/{} | zoom {}%",
+            "{} | line {}/{} | zoom {}%",
+            self.current_ref(),
             self.cursor_line() + 1,
             self.document.pages[page].lines.len().max(1),
             self.zoom_percent,
@@ -2779,28 +3505,29 @@ impl App {
 }
 
 impl FileWatchState {
-    fn from_path(path: &Path) -> Self {
-        let path = path.to_path_buf();
-        let last_modified = file_modified_time(&path).ok().flatten();
+    fn from_session(session: &PdfSession) -> Self {
+        let path = session.pdf_path().to_path_buf();
+        let last_identity = file_metadata_identity(&path).ok().flatten();
         Self {
             path,
-            last_modified,
+            last_identity,
+            last_sha256: session.source_sha256().to_string(),
+            last_hash_check: Instant::now(),
         }
     }
 
-    fn has_changed(&self) -> io::Result<bool> {
-        Ok(file_modified_time(&self.path)? != self.last_modified)
-    }
-
-    fn refresh_timestamp(&mut self) -> io::Result<()> {
-        self.last_modified = file_modified_time(&self.path)?;
-        Ok(())
+    fn should_hash(&self) -> io::Result<bool> {
+        Ok(file_metadata_identity(&self.path)? != self.last_identity
+            || self.last_hash_check.elapsed() >= Duration::from_secs(1))
     }
 }
 
-fn file_modified_time(path: &Path) -> io::Result<Option<SystemTime>> {
+fn file_metadata_identity(path: &Path) -> io::Result<Option<FileMetadataIdentity>> {
     match std::fs::metadata(path) {
-        Ok(metadata) => metadata.modified().map(Some),
+        Ok(metadata) => Ok(Some(FileMetadataIdentity {
+            modified: metadata.modified()?,
+            size: metadata.len(),
+        })),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
     }
@@ -2816,6 +3543,41 @@ fn offset_with_delta(current: u32, delta: i32, max: u32) -> u32 {
 
 fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
+}
+
+fn validate_mark_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("mark name is required".to_string());
+    }
+    if name.len() > 64 {
+        return Err("mark name must be at most 64 bytes".to_string());
+    }
+    if !name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err("mark name may contain only letters, digits, '.', '_', and '-'".to_string());
+    }
+    Ok(())
+}
+
+fn push_jump_history(history: &mut Vec<NamedMark>, mark: NamedMark) {
+    if history.last() == Some(&mark) {
+        return;
+    }
+    history.push(mark);
+    if history.len() > JUMP_HISTORY_LIMIT {
+        history.remove(0);
+    }
+}
+
+fn pop_distinct_jump(history: &mut Vec<NamedMark>, current: &NamedMark) -> Option<NamedMark> {
+    while let Some(mark) = history.pop() {
+        if &mark != current {
+            return Some(mark);
+        }
+    }
+    None
 }
 
 fn coalesce_axis_i32(current: i32, delta: i32) -> i32 {

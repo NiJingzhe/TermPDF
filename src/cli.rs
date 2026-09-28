@@ -59,13 +59,15 @@ pub struct GrepOptions {
         Ctrl-u / Ctrl-d      Half-page up/down\n  \
         Ctrl-b / Ctrl-f      Full-page back/forward\n  \
         gg / {count}gg / G  Jump to page\n  \
-        t                    Toggle outline panel (Enter jumps)\n  \
+        t                    Toggle outline panel (Enter jumps and closes)\n  \
         /, n, N, Esc         Search, navigate, hide highlight\n  \
         f / F                Follow visible links\n  \
         Tab / Shift-Tab      Focus next/previous PDF image\n  \
         y                    Copy focused image as PNG\n  \
         v / V / Ctrl-v / y  Select text and copy to clipboard\n  \
         m<char> / `<char>    Set and jump to marks\n  \
+        :                    Enter ref and named-mark commands\n  \
+        Ctrl-o / Ctrl-i      Jump backward/forward (Alt-i fallback)\n  \
         F5                   Presentation mode\n  \
         = / - / 0            Zoom in / out / reset\n  \
         i                    Toggle dark mode\n  \

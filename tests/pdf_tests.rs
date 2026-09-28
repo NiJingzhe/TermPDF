@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use sha2::{Digest, Sha256};
 use termpdf::document::PdfRect;
 use termpdf::pdf::PdfBackend;
 use termpdf::pdf::{PdfBackendOptions, resolve_pdfium_lib_path_for_tests};
@@ -231,6 +232,27 @@ fn extracts_top_level_and_nested_form_images_as_png() {
         assert!(decoded.width() > 0);
         assert!(decoded.height() > 0);
     }
+}
+
+#[test]
+fn pdf_session_identity_matches_the_owned_bytes_pdfium_parsed() {
+    let _pdfium_guard = pdfium_test_guard();
+    let Ok(backend) = PdfBackend::new(None) else {
+        eprintln!("skipping PDF snapshot identity test because PDFium is unavailable");
+        return;
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let pdf_path = temp.path().join("snapshot.pdf");
+    write_two_column_pdf(&pdf_path);
+    let bytes = std::fs::read(&pdf_path).unwrap();
+
+    let session = backend.open_session(&pdf_path).unwrap();
+
+    assert_eq!(session.source_size(), bytes.len() as u64);
+    assert_eq!(
+        session.source_sha256(),
+        format!("{:x}", Sha256::digest(&bytes))
+    );
 }
 
 #[test]

@@ -350,6 +350,66 @@ fn renderer_state_deletes_pages_that_leave_visible_set() {
 }
 
 #[test]
+fn renderer_state_shutdown_clears_replaced_and_stale_image_ids() {
+    let mut state = RendererState::default();
+    let first = RenderedPage {
+        page_index: 0,
+        placement_col: 0,
+        placement_row: 0,
+        bitmap_width: 100,
+        bitmap_height: 100,
+        crop_x: 0,
+        crop_y: 0,
+        crop_width: 100,
+        crop_height: 100,
+        placement_columns: 10,
+        placement_rows: 10,
+        rgba: vec![0u8; 100 * 100 * 4],
+    };
+    state.prepare_commands(std::slice::from_ref(&first));
+    state.prepare_commands(&[RenderedPage {
+        rgba: vec![255u8; 100 * 100 * 4],
+        ..first
+    }]);
+    state.prepare_commands(&[]);
+
+    let commands = state.clear_commands();
+
+    assert_eq!(commands.len(), 2);
+    assert!(commands.contains(&"\x1b_Ga=d,d=I,q=2,i=1\x1b\\".to_string()));
+    assert!(commands.contains(&"\x1b_Ga=d,d=I,q=2,i=2\x1b\\".to_string()));
+}
+
+#[test]
+fn renderer_state_forgets_deleted_ids_after_commands_are_confirmed() {
+    let mut state = RendererState::default();
+    let first = RenderedPage {
+        page_index: 0,
+        placement_col: 0,
+        placement_row: 0,
+        bitmap_width: 100,
+        bitmap_height: 100,
+        crop_x: 0,
+        crop_y: 0,
+        crop_width: 100,
+        crop_height: 100,
+        placement_columns: 10,
+        placement_rows: 10,
+        rgba: vec![0u8; 100 * 100 * 4],
+    };
+    state.prepare_commands(std::slice::from_ref(&first));
+    state.prepare_commands(&[RenderedPage {
+        rgba: vec![255u8; 100 * 100 * 4],
+        ..first
+    }]);
+    state.confirm_commands_written();
+
+    let commands = state.clear_commands();
+
+    assert_eq!(commands, ["\x1b_Ga=d,d=I,q=2,i=2\x1b\\"]);
+}
+
+#[test]
 fn encodes_positioned_put_with_cursor_move_prefix() {
     let command = encode_positioned_put_existing_image(
         &RenderedPage {

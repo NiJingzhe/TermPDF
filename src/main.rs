@@ -26,7 +26,11 @@ fn run_view(options: PdfBackendOptions) -> color_eyre::Result<()> {
     let backend = PdfBackend::new(options.pdfium_lib_path.as_deref())?;
     let mut session = backend.open_session(&options.pdf_path)?;
     let document = session.document().clone();
-    let mut app = App::with_path(document, session.pdf_path().to_path_buf());
+    let mut app = App::with_path_and_source_sha256(
+        document,
+        session.pdf_path().to_path_buf(),
+        session.source_sha256().to_string(),
+    );
     if options.dark_mode {
         app.handle_key(KeyEvent::from(KeyCode::Char('i')));
     }
@@ -42,7 +46,14 @@ fn run_view(options: PdfBackendOptions) -> color_eyre::Result<()> {
 fn run_extract(options: ExtractOptions) -> color_eyre::Result<()> {
     let backend = PdfBackend::new(options.pdfium_lib_path.as_deref())?;
     let session = backend.open_session(&options.pdf_path)?;
-    let source = SourceMetadata::from_path(&options.pdf_path)?;
+    let source = SourceMetadata {
+        file_name: options
+            .pdf_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned()),
+        sha256: session.source_sha256().to_string(),
+        size_bytes: session.source_size(),
+    };
     let image_assets = session.extract_image_assets()?;
     let pack = LayoutPack::from_document_with_images(session.document(), source, image_assets);
     let result = pack.write_to_dir(
