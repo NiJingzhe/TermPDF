@@ -331,6 +331,7 @@ TERMPDF_PDFIUM_VARIANT=linux-x64-glibc cargo build --release
 - `Ctrl-u` / `Ctrl-d`：向上/向下半页
 - `Ctrl-b` / `Ctrl-f`：向前/向后一整页
 - `gg`、`{count}gg`、`G`：跳转到页面
+- `t`：开关大纲面板（PDF 书签目录）；`j` / `k` 移动，`Enter` 跳转到条目所在页并关闭面板
 - `/`、`n`、`N`、`Esc`：搜索、浏览结果、隐藏高亮
 - `f` / `F`：打开可见链接
 - `v`：普通 visual 字符选择

@@ -59,6 +59,7 @@ pub struct GrepOptions {
         Ctrl-u / Ctrl-d      Half-page up/down\n  \
         Ctrl-b / Ctrl-f      Full-page back/forward\n  \
         gg / {count}gg / G  Jump to page\n  \
+        t                    Toggle outline panel (Enter jumps)\n  \
         /, n, N, Esc         Search, navigate, hide highlight\n  \
         f / F                Follow visible links\n  \
         Tab / Shift-Tab      Focus next/previous PDF image\n  \
