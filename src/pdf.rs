@@ -1,11 +1,13 @@
 use std::cmp::Ordering;
 use std::env;
+use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use color_eyre::eyre::{OptionExt, Result, WrapErr, bail};
 use pdfium_render::prelude::*;
+use sha2::{Digest, Sha256};
 
 use crate::document::{
     Document, Glyph, LinkTarget, Page, PageLink, PdfImage, PdfImageAsset, PdfLine,
@@ -44,6 +46,8 @@ pub struct PdfSession {
     pdf_document: PdfDocument<'static>,
     render_cache: PageRenderCache,
     pdf_path: PathBuf,
+    source_sha256: String,
+    source_size: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,7 +62,7 @@ pub struct PdfBackendOptions {
 #[command(
     name = "termpdf",
     about = "Terminal PDF viewer with kitty image protocol",
-    after_help = "Keybindings:\n  hjkl                Move text cursor\n  HJKL                Pan viewport\n  Ctrl-u / Ctrl-d     Half-page up/down\n  Ctrl-b / Ctrl-f     Full-page back/forward\n  gg / {count}gg / G  Jump to page\n  /, n, N, Esc        Search, navigate, hide highlight\n  f / F               Follow visible links\n  Tab / Shift-Tab     Focus next/previous PDF image\n  y                   Copy focused image as PNG\n  v / V / Ctrl-v / y Select text and copy to clipboard\n  m<char> / `<char>   Set and jump to marks\n  F5                  Presentation mode\n  = / - / 0           Zoom in / out / reset\n  i                   Toggle dark mode\n  q                   Quit"
+    after_help = "Keybindings:\n  hjkl                Move text cursor\n  HJKL                Pan viewport\n  Ctrl-u / Ctrl-d     Half-page up/down\n  Ctrl-b / Ctrl-f     Full-page back/forward\n  gg / {count}gg / G  Jump to page\n  /, n, N, Esc        Search, navigate, hide highlight\n  f / F               Follow visible links\n  Tab / Shift-Tab     Focus next/previous PDF image\n  y                   Copy focused image as PNG\n  v / V / Ctrl-v / y Select text and copy to clipboard\n  m<char> / `<char>   Set and jump to marks\n  :                   Enter ref and named-mark commands\n  Ctrl-o / Ctrl-i     Jump backward/forward (Alt-i fallback)\n  F5                  Presentation mode\n  = / - / 0           Zoom in / out / reset\n  i                   Toggle dark mode\n  q                   Quit"
 )]
 struct CliOptions {
     #[arg(value_name = "FILE")]
@@ -190,9 +194,21 @@ impl PdfBackend {
     }
 
     pub fn open_session(&self, path: &Path) -> Result<PdfSession> {
+        let bytes =
+            fs::read(path).wrap_err_with(|| format!("failed to read PDF {}", path.display()))?;
+        self.open_session_from_bytes(path, bytes)
+    }
+
+    pub(crate) fn open_session_from_bytes(
+        &self,
+        path: &Path,
+        bytes: Vec<u8>,
+    ) -> Result<PdfSession> {
+        let source_sha256 = source_sha256_for_bytes(&bytes);
+        let source_size = bytes.len() as u64;
         let pdf_document = self
             .pdfium
-            .load_pdf_from_file(path, None)
+            .load_pdf_from_byte_vec(bytes, None)
             .wrap_err_with(|| format!("failed to open PDF {}", path.display()))?;
         let document = extract_document(&pdf_document)?;
 
@@ -201,6 +217,8 @@ impl PdfBackend {
             pdf_document,
             render_cache: PageRenderCache::default(),
             pdf_path: path.to_path_buf(),
+            source_sha256,
+            source_size,
         })
     }
 }
@@ -258,6 +276,14 @@ impl PdfSession {
 
     pub fn pdf_path(&self) -> &Path {
         &self.pdf_path
+    }
+
+    pub fn source_sha256(&self) -> &str {
+        &self.source_sha256
+    }
+
+    pub fn source_size(&self) -> u64 {
+        self.source_size
     }
 
     pub fn extract_image_assets(&self) -> Result<Vec<PdfImageAsset>> {
@@ -332,6 +358,10 @@ impl PdfSession {
             })
         })
     }
+}
+
+pub(crate) fn source_sha256_for_bytes(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn extract_document(pdf_document: &PdfDocument<'_>) -> Result<Document> {

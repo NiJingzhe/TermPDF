@@ -1,8 +1,8 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use flate2::{Compression, write::ZlibEncoder};
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 
@@ -233,6 +233,8 @@ pub struct RendererState {
     next_image_id: u32,
     placements: HashMap<usize, PlacementState>,
     last_bitmaps: HashMap<usize, BitmapKey>,
+    allocated_image_ids: HashSet<u32>,
+    pending_delete_image_ids: HashSet<u32>,
     next_z: i32,
 }
 
@@ -261,6 +263,8 @@ impl Default for RendererState {
             next_image_id: 1,
             placements: HashMap::new(),
             last_bitmaps: HashMap::new(),
+            allocated_image_ids: HashSet::new(),
+            pending_delete_image_ids: HashSet::new(),
             next_z: -1_000_000_000,
         }
     }
@@ -283,6 +287,7 @@ impl RendererState {
 
         for page_index in stale_pages {
             if let Some(placement) = self.placements.remove(&page_index) {
+                self.pending_delete_image_ids.insert(placement.image_id);
                 commands.push(encode_delete_image(KittyImageIds {
                     image_id: placement.image_id,
                     placement_id: placement.placement_id,
@@ -323,6 +328,7 @@ impl RendererState {
             let previous_image_id = placement.image_id;
             let image_id = self.next_image_id;
             self.next_image_id += 1;
+            self.allocated_image_ids.insert(image_id);
             placement.image_id = image_id;
             commands.extend(encode_transmit_only(rendered, image_id));
             commands.push(encode_positioned_put_existing_image(
@@ -335,6 +341,7 @@ impl RendererState {
             ));
             self.next_z = self.next_z.saturating_add(1);
             if previous_image_id != 0 {
+                self.pending_delete_image_ids.insert(previous_image_id);
                 commands.push(encode_delete_image(KittyImageIds {
                     image_id: previous_image_id,
                     placement_id: placement.placement_id,
@@ -346,19 +353,26 @@ impl RendererState {
         commands
     }
 
+    pub fn confirm_commands_written(&mut self) {
+        for image_id in self.pending_delete_image_ids.drain() {
+            self.allocated_image_ids.remove(&image_id);
+        }
+    }
+
     pub fn clear_commands(&mut self) -> Vec<String> {
         let commands = self
-            .placements
-            .values()
-            .map(|placement| {
+            .allocated_image_ids
+            .drain()
+            .map(|image_id| {
                 encode_delete_image(KittyImageIds {
-                    image_id: placement.image_id,
-                    placement_id: placement.placement_id,
+                    image_id,
+                    placement_id: 0,
                 })
             })
             .collect::<Vec<_>>();
         self.placements.clear();
         self.last_bitmaps.clear();
+        self.pending_delete_image_ids.clear();
         commands
     }
 }

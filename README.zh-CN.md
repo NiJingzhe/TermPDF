@@ -8,6 +8,14 @@ TermPDF 是一个终端 PDF 阅读器，使用 Rust、ratatui、PDFium 和 Kitty
 
 ## 更新日志
 
+### 0.5.0
+
+- 新增受限的 `:` 命令模式，可在已打开的 TUI 内跳转到稳定的页面、文本行、glyph、链接和图片 ref。
+- 状态栏新增当前稳定 ref；可使用 `:ref` 明确显示，并使用 `:copy-ref` 复制到剪贴板。
+- 新增持久化字符串 named marks，支持 `:mark`、`:jump`、`:marks` 和 `:delmark`；标记按 PDF canonical path 和内容 SHA-256 隔离。
+- 新增 Vim 风格 jump list，记录显式页面、搜索、链接、ref 和 mark 跳转；使用 `Ctrl-o` / `Ctrl-i` 浏览，并提供 `Alt-i` 前进 fallback。
+- 保留现有单字符 `m<char>` / `` `<char> `` 会话标记。
+
 ### 0.4.2
 
 - 新增 `termpdf completions zsh` 和 `termpdf completions fish`，可将 shell 补全脚本输出到 stdout。
@@ -48,7 +56,9 @@ TermPDF 是一个终端 PDF 阅读器，使用 Rust、ratatui、PDFium 和 Kitty
 - Vim 风格导航和页码跳转
 - 带图像级高亮的搜索
 - 使用图像级标签覆盖层打开链接
-- 用标记快速导航
+- 使用会话标记和持久化 named marks 快速导航
+- 在 TUI 内跳转并复制稳定 ref
+- Vim 风格前后 jump history
 - 演示模式
 - 深色模式切换
 - 监听模式，支持 PDF 实时重载
@@ -118,8 +128,8 @@ termpdf completions fish > ~/.config/fish/completions/termpdf.fish
 从 GitHub Releases 页面下载适合你平台的压缩包，然后解压：
 
 ```bash
-tar -xzf termpdf-0.4.2-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.4.2-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.5.0-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.5.0-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 
@@ -339,10 +349,28 @@ TERMPDF_PDFIUM_VARIANT=linux-x64-glibc cargo build --release
 - `Tab` / `Shift-Tab`：聚焦下一张/上一张抽取出的 PDF 图片
 - `y`：把当前聚焦图片以 PNG 复制，或把当前 visual 选择以纯文本复制
 - `m<char>` / `` `<char> ``：设置标记并跳转到标记
+- `:`：进入 ref 和 named mark 命令模式
+- `Ctrl-o` / `Ctrl-i`：向后/向前跳转；终端无法区分 `Ctrl-i` 与 `Tab` 时使用 `Alt-i` 前进
 - `F5`：演示模式
 - `=` / `-` / `0`：放大、缩小、重置缩放
 - `i`：切换深色模式
 - `q`：退出
+
+## TUI 命令
+
+- `:goto <ref>` / `:ref <ref>`：跳转到稳定 ref
+- `:ref`：显示当前稳定 ref
+- `:copy-ref`：以纯文本复制当前稳定 ref
+- `:mark <name>`：使用字符串名称持久化当前 ref、页内相对视口位置和缩放比例
+- `:jump <name>`：跳转到 named mark
+- `:marks`：列出当前 PDF 内容的 named marks
+- `:delmark <name>`：删除 named mark
+
+支持的 ref 使用从 1 开始的编号：`p1`、`p1.t2`、`p1.t2.c3`、`p1.link1` 和 `p1.image1`。ref 跳转只用于已经打开的阅读器，不提供 TUI `--ref` 启动参数。
+
+named marks 按 PDF canonical path 和内容 SHA-256 建立 key，因此同一路径文件被替换后不会加载旧内容的标记。标记名称最多 64 bytes，只能包含 ASCII 字母、数字、`.`、`_` 和 `-`。
+
+macOS 的持久化标记位于 `~/Library/Application Support/termpdf/marks.json`。Linux 使用 `$XDG_STATE_HOME/termpdf/marks.json`；未设置 `XDG_STATE_HOME` 时使用 `~/.local/state/termpdf/marks.json`。
 
 ## 状态
 

@@ -8,7 +8,7 @@ use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::document::{Document, LinkTarget, PageLink, PdfImageAsset, PdfMatrix, PdfRect};
+use crate::document::{Document, LinkTarget, PdfImageAsset, PdfMatrix, PdfRect};
 
 pub const LAYOUT_SCHEMA: &str = "termpdf.layout.v2";
 pub const LEGACY_LAYOUT_SCHEMA: &str = "termpdf.layout.v1";
@@ -398,7 +398,7 @@ impl LayoutPack {
                 }
             }
 
-            for (link_index, link) in sorted_links(&page.links).into_iter().enumerate() {
+            for (link_index, (_, link)) in page.links_in_reading_order().into_iter().enumerate() {
                 let link_ref = link_ref(page_index, link_index);
                 let link_bbox = LayoutRect::from(link.bbox);
                 blocks.push(LayoutBlock::Link {
@@ -698,24 +698,6 @@ fn text_preview(text: &str) -> String {
         preview.push_str("...");
     }
     preview
-}
-
-fn sorted_links(links: &[PageLink]) -> Vec<&PageLink> {
-    let mut sorted = links.iter().collect::<Vec<_>>();
-    sorted.sort_by(|left, right| {
-        let left_top = left.bbox.y + left.bbox.height;
-        let right_top = right.bbox.y + right.bbox.height;
-        right_top
-            .partial_cmp(&left_top)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| {
-                left.bbox
-                    .x
-                    .partial_cmp(&right.bbox.x)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-    });
-    sorted
 }
 
 fn validate_output_dir(output_dir: &Path, overwrite: bool) -> Result<()> {

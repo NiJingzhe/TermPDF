@@ -65,6 +65,8 @@ pub struct GrepOptions {
         y                    Copy focused image as PNG\n  \
         v / V / Ctrl-v / y  Select text and copy to clipboard\n  \
         m<char> / `<char>    Set and jump to marks\n  \
+        :                    Enter ref and named-mark commands\n  \
+        Ctrl-o / Ctrl-i      Jump backward/forward (Alt-i fallback)\n  \
         F5                   Presentation mode\n  \
         = / - / 0            Zoom in / out / reset\n  \
         i                    Toggle dark mode\n  \

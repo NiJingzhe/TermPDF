@@ -123,6 +123,24 @@ impl Page {
             images: Vec::new(),
         }
     }
+
+    pub fn links_in_reading_order(&self) -> Vec<(usize, &PageLink)> {
+        let mut links = self.links.iter().enumerate().collect::<Vec<_>>();
+        links.sort_by(|(_, left), (_, right)| {
+            let left_top = left.bbox.y + left.bbox.height;
+            let right_top = right.bbox.y + right.bbox.height;
+            right_top
+                .partial_cmp(&left_top)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    left.bbox
+                        .x
+                        .partial_cmp(&right.bbox.x)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        });
+        links
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

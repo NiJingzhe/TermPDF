@@ -1,11 +1,12 @@
 mod common;
 
+use std::fs;
 use std::path::PathBuf;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use termpdf::app::{App, Mode};
-use termpdf::document::{Document, Page, PdfImage, PdfMatrix, PdfRect};
+use termpdf::document::{Document, LinkTarget, Page, PageLink, PdfImage, PdfMatrix, PdfRect};
 use termpdf::render::{CellPixels, ViewportPixels, build_document_layout, current_page_for_scroll};
 
 #[test]
@@ -276,6 +277,385 @@ fn m_and_backtick_store_and_restore_marks() {
     app.handle_key(KeyEvent::from(KeyCode::Char('a')));
 
     assert_eq!(app.viewport_offset(), marked_offset);
+}
+
+#[test]
+fn command_mode_jumps_to_all_supported_ref_types() {
+    let mut app = App::new(document_with_reference_targets());
+
+    enter_command(&mut app, "goto p2");
+    assert_eq!(app.cursor_page(), 1);
+    assert!(app.status().contains("jumped to p2"));
+
+    enter_command(&mut app, "goto p1.t2");
+    assert_eq!((app.cursor_page(), app.cursor_line()), (0, 1));
+    assert_eq!(
+        app.cursor_bounds_for_page(0),
+        Some(app.document().pages[0].lines[1].bbox)
+    );
+
+    enter_command(&mut app, "goto p1.t1.c3");
+    assert_eq!((app.text_cursor().page, app.text_cursor().line), (0, 0));
+    assert_eq!(app.text_cursor().glyph, 2);
+    assert_eq!(
+        app.cursor_bounds_for_page(0),
+        Some(app.document().pages[0].lines[0].glyphs[2].bbox)
+    );
+
+    enter_command(&mut app, "goto p1.image2");
+    assert_eq!(app.focused_image(), Some((0, 1)));
+    assert_eq!(
+        app.cursor_bounds_for_page(0),
+        Some(app.document().pages[0].images[1].bbox)
+    );
+
+    enter_command(&mut app, "goto p1.link1");
+    assert_eq!(app.focused_image(), None);
+    assert_eq!(
+        app.cursor_bounds_for_page(0),
+        Some(app.document().pages[0].links[0].bbox)
+    );
+}
+
+#[test]
+fn link_refs_use_the_same_visual_order_as_layout_packs() {
+    let mut page = Page::from_text(0, &["links"]);
+    page.links = vec![
+        test_link(200.0, 10.0, "https://bottom.example"),
+        test_link(30.0, 80.0, "https://top-right.example"),
+        test_link(10.0, 80.0, "https://top-left.example"),
+    ];
+    let mut app = App::new(Document { pages: vec![page] });
+
+    enter_command(&mut app, "goto p1.link1");
+    assert_eq!(
+        app.cursor_bounds_for_page(0),
+        Some(app.document().pages[0].links[2].bbox)
+    );
+
+    enter_command(&mut app, "goto p1.link2");
+    assert_eq!(
+        app.cursor_bounds_for_page(0),
+        Some(app.document().pages[0].links[1].bbox)
+    );
+}
+
+#[test]
+fn command_mode_rejects_refs_missing_from_the_document() {
+    let mut app = App::new(common::sample_document());
+
+    enter_command(&mut app, "goto p99");
+    assert!(app.status().contains("outside this document"));
+
+    enter_command(&mut app, "goto p1.table1");
+    assert!(app.status().contains("invalid document ref"));
+}
+
+#[test]
+fn copy_ref_uses_the_current_focused_reference() {
+    let (mut app, clipboard) =
+        App::with_memory_clipboard_for_tests(document_with_reference_targets());
+
+    enter_command(&mut app, "goto p1.image2");
+    enter_command(&mut app, "copy-ref");
+
+    assert_eq!(clipboard.text().as_deref(), Some("p1.image2"));
+    assert!(app.status().contains("copied ref p1.image2"));
+}
+
+#[test]
+fn ctrl_o_and_ctrl_i_navigate_jump_history() {
+    let mut app = App::new(common::sample_document());
+
+    enter_command(&mut app, "goto p2.t2.c2");
+    assert_eq!(app.text_cursor().page, 1);
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert_eq!(app.text_cursor().page, 0);
+    assert!(app.status().contains("jumped back"));
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::CONTROL));
+    assert_eq!(app.text_cursor().page, 1);
+    assert_eq!(app.text_cursor().glyph, 1);
+    assert!(app.status().contains("jumped forward"));
+}
+
+#[test]
+fn alt_i_is_an_unambiguous_forward_history_fallback() {
+    let mut app = App::new(common::sample_document());
+
+    enter_command(&mut app, "goto p2.t2.c2");
+    app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    app.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::ALT));
+
+    assert_eq!(app.text_cursor().page, 1);
+    assert_eq!(app.text_cursor().glyph, 1);
+    assert!(app.status().contains("jumped forward"));
+}
+
+#[test]
+fn repeated_noop_ref_jump_does_not_pollute_history() {
+    let mut app = App::new(common::sample_document());
+
+    enter_command(&mut app, "goto p2.t2.c2");
+    enter_command(&mut app, "goto p2.t2.c2");
+    app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+
+    assert_eq!(app.text_cursor().page, 0);
+}
+
+#[test]
+fn jump_history_restores_the_recorded_viewport_position() {
+    let mut app = App::new(sample_document_with_pages(2, 20));
+    app.handle_key(KeyEvent::from(KeyCode::Char('J')));
+    let original_offset = app.viewport_offset();
+
+    enter_command(&mut app, "goto p2.t1.c1");
+    app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+
+    assert!(app.viewport_offset().x.abs_diff(original_offset.x) <= 1);
+    assert!(app.viewport_offset().y.abs_diff(original_offset.y) <= 1);
+}
+
+#[test]
+fn named_marks_persist_and_can_be_deleted() {
+    let temp = tempfile::tempdir().unwrap();
+    let pdf_path = temp.path().join("paper.pdf");
+    let marks_path = temp.path().join("state/marks.json");
+    fs::write(&pdf_path, b"stable PDF fixture bytes").unwrap();
+
+    let (mut app, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path.clone(),
+        marks_path.clone(),
+    );
+    enter_command(&mut app, "goto p2.t2.c3");
+    enter_command(&mut app, "mark conclusion");
+    assert!(app.status().contains("mark 'conclusion' set"));
+
+    let (mut reopened, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path.clone(),
+        marks_path.clone(),
+    );
+    enter_command(&mut reopened, "jump conclusion");
+    assert_eq!(reopened.text_cursor().page, 1);
+    assert_eq!(reopened.text_cursor().line, 1);
+    assert_eq!(reopened.text_cursor().glyph, 2);
+
+    enter_command(&mut reopened, "delmark conclusion");
+    assert!(reopened.status().contains("deleted"));
+
+    let (mut reopened, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path,
+        marks_path,
+    );
+    enter_command(&mut reopened, "jump conclusion");
+    assert!(reopened.status().contains("not set"));
+}
+
+#[test]
+fn named_marks_are_isolated_when_pdf_content_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let pdf_path = temp.path().join("paper.pdf");
+    let marks_path = temp.path().join("marks.json");
+    fs::write(&pdf_path, b"first PDF contents").unwrap();
+
+    let (mut app, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path.clone(),
+        marks_path.clone(),
+    );
+    enter_command(&mut app, "mark old-version");
+
+    fs::write(&pdf_path, b"replaced PDF contents").unwrap();
+    let (mut reopened, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path,
+        marks_path,
+    );
+    enter_command(&mut reopened, "jump old-version");
+
+    assert!(reopened.status().contains("not set"));
+}
+
+#[test]
+fn watch_reload_clears_old_marks_and_history_when_pdf_content_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let pdf_path = temp.path().join("paper.pdf");
+    let marks_path = temp.path().join("marks.json");
+    fs::write(&pdf_path, b"first PDF contents").unwrap();
+    let (mut app, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path.clone(),
+        marks_path,
+    );
+    enter_command(&mut app, "mark old-version");
+    app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('a')));
+    enter_command(&mut app, "goto p2.t1.c1");
+
+    fs::write(&pdf_path, b"replaced PDF contents").unwrap();
+    app.replace_document_preserving_view_position(common::sample_document());
+    enter_command(&mut app, "jump old-version");
+    assert!(app.status().contains("not set"));
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert!(app.status().contains("history is empty"));
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('`')));
+    app.handle_key(KeyEvent::from(KeyCode::Char('a')));
+    assert!(app.status().contains("not set"));
+}
+
+#[test]
+fn malformed_marks_file_is_reported_without_dropping_same_document_session_marks() {
+    let temp = tempfile::tempdir().unwrap();
+    let pdf_path = temp.path().join("paper.pdf");
+    let marks_path = temp.path().join("marks.json");
+    fs::write(&pdf_path, b"PDF contents").unwrap();
+    let (mut app, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path.clone(),
+        marks_path.clone(),
+    );
+    enter_command(&mut app, "mark before-corruption");
+
+    fs::write(&marks_path, b"not json").unwrap();
+    app.replace_document_preserving_view_position(common::sample_document());
+    assert!(app.status().contains("marks unavailable"));
+    enter_command(&mut app, "jump before-corruption");
+    assert!(app.status().contains("jumped to mark"));
+
+    let (app, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path,
+        marks_path,
+    );
+    assert!(app.status().contains("marks unavailable"));
+}
+
+#[test]
+fn concurrent_viewers_merge_named_mark_updates() {
+    let temp = tempfile::tempdir().unwrap();
+    let pdf_path = temp.path().join("paper.pdf");
+    let marks_path = temp.path().join("marks.json");
+    fs::write(&pdf_path, b"PDF contents").unwrap();
+    let (mut first, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path.clone(),
+        marks_path.clone(),
+    );
+    let (mut second, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path.clone(),
+        marks_path.clone(),
+    );
+
+    enter_command(&mut first, "mark introduction");
+    enter_command(&mut second, "goto p2.t1.c1");
+    enter_command(&mut second, "mark conclusion");
+
+    let (mut reopened, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path,
+        marks_path,
+    );
+    enter_command(&mut reopened, "marks");
+    assert!(reopened.status().contains("conclusion, introduction"));
+}
+
+#[test]
+fn dirty_marks_keep_their_original_merge_base_across_same_document_reload() {
+    let temp = tempfile::tempdir().unwrap();
+    let pdf_path = temp.path().join("paper.pdf");
+    let marks_path = temp.path().join("marks.json");
+    fs::write(&pdf_path, b"PDF contents").unwrap();
+    let (mut first, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path.clone(),
+        marks_path.clone(),
+    );
+    let (mut second, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path.clone(),
+        marks_path.clone(),
+    );
+
+    fs::create_dir(&marks_path).unwrap();
+    enter_command(&mut first, "mark local-dirty");
+    assert!(first.status().contains("save failed"));
+    fs::remove_dir(&marks_path).unwrap();
+
+    enter_command(&mut second, "mark external");
+    first.replace_document_preserving_view_position(common::sample_document());
+    enter_command(&mut first, "mark local-saved");
+
+    let (mut reopened, _) = App::with_path_and_memory_clipboard_for_tests(
+        common::sample_document(),
+        pdf_path,
+        marks_path,
+    );
+    enter_command(&mut reopened, "marks");
+    assert!(reopened.status().contains("external"));
+    assert!(reopened.status().contains("local-dirty"));
+    assert!(reopened.status().contains("local-saved"));
+}
+
+#[test]
+fn command_mode_clears_a_pending_normal_mode_count() {
+    let mut app = App::new(common::sample_document());
+    enter_command(&mut app, "goto p1.t1.c1");
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('2')));
+    enter_command(&mut app, "ref");
+    app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+
+    assert_eq!(app.text_cursor().line, 1);
+}
+
+#[test]
+fn jump_history_clears_a_pending_normal_mode_count() {
+    let mut app = App::new(common::sample_document());
+    enter_command(&mut app, "goto p1.t1.c1");
+    enter_command(&mut app, "goto p2.t1.c1");
+
+    app.handle_key(KeyEvent::from(KeyCode::Char('2')));
+    app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+
+    assert_eq!(app.text_cursor().line, 1);
+}
+
+#[test]
+fn visual_mode_replaces_object_refs_with_the_text_cursor_ref() {
+    let (mut app, clipboard) =
+        App::with_memory_clipboard_for_tests(document_with_reference_targets());
+
+    enter_command(&mut app, "goto p1.image2");
+    app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+    app.handle_key(KeyEvent::from(KeyCode::Esc));
+    enter_command(&mut app, "copy-ref");
+
+    assert!(clipboard.text().unwrap().starts_with("p1.t"));
+}
+
+#[test]
+fn empty_page_uses_a_page_ref() {
+    let document = Document {
+        pages: vec![Page {
+            lines: Vec::new(),
+            bbox: PdfRect::new(0.0, 0.0, 200.0, 300.0),
+            links: Vec::new(),
+            images: Vec::new(),
+        }],
+    };
+    let (mut app, clipboard) = App::with_memory_clipboard_for_tests(document);
+
+    enter_command(&mut app, "copy-ref");
+
+    assert_eq!(clipboard.text().as_deref(), Some("p1"));
 }
 
 #[test]
@@ -769,6 +1149,38 @@ fn document_with_images() -> Document {
     ];
     pages[1].images = vec![test_image(1, 15.0, 25.0, 35.0, 45.0)];
     Document { pages }
+}
+
+fn document_with_reference_targets() -> Document {
+    let mut document = document_with_images();
+    document.pages[0].lines = Page::from_text(0, &["first line", "second line"]).lines;
+    document.pages[0].links.push(PageLink {
+        bbox: PdfRect::new(40.0, 50.0, 60.0, 20.0),
+        target: LinkTarget::LocalDestination {
+            page: 1,
+            x: None,
+            y: None,
+            zoom: None,
+        },
+    });
+    document
+}
+
+fn test_link(x: f32, y: f32, uri: &str) -> PageLink {
+    PageLink {
+        bbox: PdfRect::new(x, y, 20.0, 10.0),
+        target: LinkTarget::ExternalUri(uri.to_string()),
+    }
+}
+
+fn enter_command(app: &mut App, command: &str) {
+    app.handle_key(KeyEvent::from(KeyCode::Char(':')));
+    assert_eq!(app.mode(), Mode::Command);
+    for ch in command.chars() {
+        app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
+    }
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(app.mode(), Mode::Normal);
 }
 
 fn test_image(page: usize, x: f32, y: f32, width: f32, height: f32) -> PdfImage {

@@ -8,6 +8,14 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 
 ## CHANGELOG
 
+### 0.5.0
+
+- Added a restricted `:` command mode for jumping to stable page, text-line, glyph, link, and image refs inside the open TUI.
+- Added the current stable ref to the status line, with `:ref` for explicit display and `:copy-ref` for clipboard copy.
+- Added persistent string named marks with `:mark`, `:jump`, `:marks`, and `:delmark`; marks are isolated by canonical PDF path and content SHA-256.
+- Added a Vim-style jump list for explicit page, search, link, ref, and mark jumps, navigated with `Ctrl-o` / `Ctrl-i` and an `Alt-i` forward fallback.
+- Kept existing single-character `m<char>` / `` `<char> `` marks as lightweight session marks.
+
 ### 0.4.2
 
 - Added `termpdf completions zsh` and `termpdf completions fish` to generate shell completion scripts on stdout.
@@ -48,7 +56,9 @@ It focuses on reader-oriented navigation for kitty-compatible terminals, with im
 - Vim-style navigation and page jumps
 - Search with image-level highlights
 - Follow links with image-level tag overlays
-- Marks for quick navigation
+- Session and persistent named marks for quick navigation
+- Stable-ref navigation and clipboard copy inside the TUI
+- Vim-style backward and forward jump history
 - Presentation mode
 - Dark mode toggle
 - Watch mode with live PDF reload
@@ -118,8 +128,8 @@ termpdf completions fish > ~/.config/fish/completions/termpdf.fish
 Download the archive for your platform from the GitHub Releases page, then extract it:
 
 ```bash
-tar -xzf termpdf-0.4.2-x86_64-unknown-linux-gnu.tar.gz
-cd termpdf-0.4.2-x86_64-unknown-linux-gnu
+tar -xzf termpdf-0.5.0-x86_64-unknown-linux-gnu.tar.gz
+cd termpdf-0.5.0-x86_64-unknown-linux-gnu
 ./termpdf path/to/file.pdf
 ```
 
@@ -339,10 +349,28 @@ Each release archive contains:
 - `Tab` / `Shift-Tab`: focus the next/previous extracted PDF image
 - `y`: copy the focused image as PNG, or copy the active visual selection as plain text
 - `m<char>` / `` `<char> ``: set and jump to marks
+- `:`: enter ref and named-mark command mode
+- `Ctrl-o` / `Ctrl-i`: jump backward/forward; use `Alt-i` to move forward when the terminal cannot distinguish `Ctrl-i` from `Tab`
 - `F5`: presentation mode
 - `=` / `-` / `0`: zoom in / out / reset
 - `i`: toggle dark mode
 - `q`: quit
+
+## TUI Commands
+
+- `:goto <ref>` / `:ref <ref>`: jump to a stable ref
+- `:ref`: display the current stable ref
+- `:copy-ref`: copy the current stable ref as plain text
+- `:mark <name>`: persist the current ref, page-relative viewport position, and zoom under a string name
+- `:jump <name>`: jump to a named mark
+- `:marks`: list named marks for the current PDF content
+- `:delmark <name>`: delete a named mark
+
+Supported refs are one-based: `p1`, `p1.t2`, `p1.t2.c3`, `p1.link1`, and `p1.image1`. Ref navigation is an interaction within an already open viewer; there is no TUI `--ref` startup option.
+
+Named marks are keyed by the PDF's canonical path and content SHA-256, so replacing a file at the same path does not load marks from the old contents. Mark names may contain ASCII letters, digits, `.`, `_`, and `-`, up to 64 bytes.
+
+Persistent marks are stored in `~/Library/Application Support/termpdf/marks.json` on macOS. On Linux they are stored in `$XDG_STATE_HOME/termpdf/marks.json`, or `~/.local/state/termpdf/marks.json` when `XDG_STATE_HOME` is unset.
 
 ## Status
 
