@@ -109,7 +109,7 @@ termpdf completions fish > ~/.config/fish/completions/termpdf.fish
   - `aarch64-apple-darwin`
   - `x86_64-unknown-linux-gnu`
   - `aarch64-unknown-linux-gnu`
-- 支持 Kitty 图形协议的终端，例如 kitty 或 ghostty
+- 支持 Kitty 图形协议的终端；kitty、ghostty、WezTerm、foot 会被自动识别。当自动识别失败时（例如通过 SSH 连接、`TERM_PROGRAM` 不会被转发），用 `--force-kitty` 强制启用图像渲染；用 `--text-only` 强制走纯文本模式
 - 当外层终端支持 Kitty 图形协议，并且在 `~/.tmux.conf` 中启用 `set -g allow-passthrough on` 时支持 tmux；TermPDF 会自动把 Kitty 图像命令包裹在 tmux 透传序列中
 - `termpdf` 和匹配的打包版 `libpdfium` 需要放在同一目录，除非你通过 `PDFIUM_LIB_PATH` 或 `--pdfium-lib` 显式指定另一个 PDFium 构建
 

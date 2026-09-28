@@ -52,6 +52,7 @@ pub struct PdfBackendOptions {
     pub pdfium_lib_path: Option<PathBuf>,
     pub dark_mode: bool,
     pub watch_mode: bool,
+    pub kitty_override: Option<bool>,
 }
 
 #[derive(Parser, Debug)]
@@ -93,6 +94,7 @@ impl PdfBackendOptions {
                 .pdfium_lib_path
                 .or_else(|| env::var_os("PDFIUM_LIB_PATH").map(PathBuf::from)),
             dark_mode: cli.dark_mode,
+            kitty_override: None,
         })
     }
 
@@ -153,6 +155,7 @@ impl PdfBackendOptions {
             watch_mode,
             pdfium_lib_path,
             dark_mode,
+            kitty_override: None,
         })
     }
 }
