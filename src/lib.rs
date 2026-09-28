@@ -8,4 +8,5 @@ pub mod pdfium_bundle;
 pub mod platform;
 pub mod render;
 pub mod search;
+pub mod term_pixels;
 pub mod ui;
