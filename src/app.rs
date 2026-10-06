@@ -49,6 +49,7 @@ const JUMP_HISTORY_LIMIT: usize = 100;
 pub struct RunOptions {
     pub watch_mode: bool,
     pub kitty_override: Option<bool>,
+    pub kitty_probe: Option<bool>,
 }
 
 impl RunOptions {
@@ -56,11 +57,17 @@ impl RunOptions {
         Self {
             watch_mode,
             kitty_override: None,
+            kitty_probe: None,
         }
     }
 
     pub const fn with_kitty_override(mut self, kitty_override: Option<bool>) -> Self {
         self.kitty_override = kitty_override;
+        self
+    }
+
+    pub const fn with_kitty_probe(mut self, kitty_probe: Option<bool>) -> Self {
+        self.kitty_probe = kitty_probe;
         self
     }
 }
@@ -313,6 +320,7 @@ pub fn run(
 
     app.kitty_supported = options
         .kitty_override
+        .or(options.kitty_probe)
         .unwrap_or_else(likely_supports_kitty_graphics);
     app.status = app.default_status();
 

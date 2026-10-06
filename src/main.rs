@@ -36,8 +36,11 @@ fn run_view(options: PdfBackendOptions) -> color_eyre::Result<()> {
     }
     // Terminals that leave TIOCGWINSZ pixel fields empty still answer escape queries.
     let _ = termpdf::term_pixels::prime_cell_pixels(Duration::from_millis(150));
-    let run_options =
-        RunOptions::new(options.watch_mode).with_kitty_override(options.kitty_override);
+    // Probe for Kitty graphics support before entering the alternate screen.
+    let kitty_probe = termpdf::kitty::probe_kitty_graphics(Duration::from_millis(150));
+    let run_options = RunOptions::new(options.watch_mode)
+        .with_kitty_override(options.kitty_override)
+        .with_kitty_probe(kitty_probe);
     ratatui::run(|terminal| run(terminal, &mut app, &backend, &mut session, run_options))?;
 
     Ok(())
