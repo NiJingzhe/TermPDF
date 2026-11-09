@@ -4,7 +4,8 @@ use flate2::{Compression, write::ZlibEncoder};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::io::Write;
+use std::io::{IsTerminal, Read, Write};
+use std::time::{Duration, Instant};
 
 use crate::render::RenderedPage;
 
@@ -94,6 +95,102 @@ pub fn parse_probe_response(response: &str, query_id: u32) -> KittyProbeResult {
         KittyProbeResult::Unsupported
     } else {
         KittyProbeResult::Unknown
+    }
+}
+
+/// Probe the terminal for Kitty graphics support at runtime.
+///
+/// Sends a Kitty graphics query (`a=q`) and reads the response.
+/// Returns `Some(true)` if the terminal responds with a valid Kitty response,
+/// `Some(false)` if it responds with a CSI sequence (indicating it doesn't understand
+/// Kitty but does understand escape sequences), or `None` if there's no response
+/// (timeout) or stdin is not a terminal.
+///
+/// The caller should fall back to environment variable detection when this returns `None`.
+pub fn probe_kitty_graphics(timeout: Duration) -> Option<bool> {
+    if !std::io::stdin().is_terminal() {
+        return None;
+    }
+
+    let guard = ProbeRawModeGuard::enable()?;
+    let stdout = std::io::stdout();
+    let mut writer = stdout.lock();
+
+    let query_id = 0xDEAD_BEEF;
+    let query = encode_probe_query(query_id);
+    let transport = crate::platform::kitty_transport();
+    let wrapped = wrap_command_for_transport(&query, transport);
+
+    let result = ask_probe(&mut writer, wrapped.as_bytes(), timeout, query_id);
+
+    drop(guard);
+    result
+}
+
+fn ask_probe(
+    writer: &mut impl Write,
+    query: &[u8],
+    timeout: Duration,
+    query_id: u32,
+) -> Option<bool> {
+    writer.write_all(query).ok()?;
+    writer.flush().ok()?;
+    let reply = read_probe_reply(timeout)?;
+    match parse_probe_response(&reply, query_id) {
+        KittyProbeResult::Supported => Some(true),
+        KittyProbeResult::Unsupported => Some(false),
+        KittyProbeResult::Unknown => None,
+    }
+}
+
+fn read_probe_reply(timeout: Duration) -> Option<String> {
+    let mut stdin = std::io::stdin();
+    let mut reply = String::new();
+    let mut buffer = [0u8; 128];
+    let deadline = Instant::now() + timeout;
+
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        if !probe_input_is_ready(remaining) {
+            break;
+        }
+        match stdin.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => reply.push_str(&String::from_utf8_lossy(&buffer[..read])),
+        }
+        // Kitty responses end with ST (ESC \), cell size responses end with 't'.
+        // Check for both to avoid blocking when other queries are in flight.
+        if reply.contains(ESCAPE_SUFFIX) || reply.contains('t') {
+            break;
+        }
+    }
+
+    (!reply.is_empty()).then_some(reply)
+}
+
+fn probe_input_is_ready(timeout: Duration) -> bool {
+    let mut descriptor = libc::pollfd {
+        fd: libc::STDIN_FILENO,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let milliseconds = timeout.as_millis().min(i32::MAX as u128) as i32;
+
+    // SAFETY: `descriptor` points at a single initialized pollfd that stays alive
+    // for the whole call, and the count matches the pointer.
+    unsafe { libc::poll(&mut descriptor, 1, milliseconds) > 0 }
+}
+
+struct ProbeRawModeGuard;
+
+impl ProbeRawModeGuard {
+    fn enable() -> Option<Self> {
+        crossterm::terminal::enable_raw_mode().ok().map(|()| Self)
+    }
+}
+
+impl Drop for ProbeRawModeGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
     }
 }
 
